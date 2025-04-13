@@ -39,6 +39,58 @@
     <!-- Link to External Stylesheet -->
     <link rel="stylesheet" href="styles.css">
 
+    <style>
+      /* Critical styles to ensure content is visible before CSS loads */
+      .loading-indicator {
+        display: flex; 
+        position: absolute; 
+        top: 0; 
+        left: 0; 
+        width: 100%; 
+        height: 100%; 
+        background: #0a0a12; 
+        flex-direction: column; 
+        justify-content: center; 
+        align-items: center; 
+        gap: 20px; 
+        z-index: 5000;
+      }
+      
+      /* Additional responsive fixes that complement styles.css */
+      .timer-message {
+        text-align: center;
+        margin-top: 10px;
+        font-size: 0.9rem;
+        color: rgba(236, 240, 241, 0.7);
+        background: rgba(0, 0, 0, 0.2);
+        padding: 8px 12px;
+        border-radius: 8px;
+        line-height: 1.4;
+      }
+      
+      @media (max-width: 480px) {
+        .onboarding-card {
+          padding: 20px 15px;
+        }
+        
+        .onboarding-logo {
+          font-size: 2rem;
+        }
+        
+        .onboarding-timer {
+          max-width: 100%;
+        }
+        
+        .timer-message {
+          font-size: 0.8rem;
+        }
+        
+        .experience-card {
+          padding: 12px;
+        }
+      }
+    </style>
+
     <!-- Basic noscript message -->
     <noscript>
       <style> #root { display: none; } </style>
@@ -52,7 +104,7 @@
     <!-- React Mount Point -->
     <div id="root">
         <!-- Initial loading state could be placed here if not handled by React -->
-        <div class="loading-indicator" style="display: flex; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #0a0a12; flex-direction: column; justify-content: center; align-items: center; gap: 20px; z-index: 5000;">
+        <div class="loading-indicator">
             <div class="spinner"></div>
             <div class="loading-text">Loading Experience...</div>
         </div>
@@ -216,6 +268,10 @@
                         className="timer-progress-fill"
                         style={{ width: `${(currentTime / timerValue) * 100}%` }}
                       ></div>
+                    </div>
+                    <div className="timer-message">
+                      Your transcending experience will begin automatically when the timer ends. 
+                      You can also start your journey anytime by selecting "Begin Journey" below.
                     </div>
                   </div>
 
@@ -452,11 +508,13 @@
 
             if (!showOnboarding) {
                 window.addEventListener('mousemove', handleMouseMove);
+                window.addEventListener('touchstart', handleMouseMove, {passive: true}); // Add touch support
                 if (uiVisible) handleMouseMove(); // Start timer if UI is initially visible
             }
 
             return () => {
               window.removeEventListener('mousemove', handleMouseMove);
+              window.removeEventListener('touchstart', handleMouseMove);
               if (uiVisibilityTimeoutRef.current) {
                 clearTimeout(uiVisibilityTimeoutRef.current);
               }
@@ -642,6 +700,20 @@
 
           // Enhanced Export Panel Component
           const EnhancedExportPanel = () => {
+            // Define quality and format options as these aren't provided in the snippet
+            const qualityOptions = [
+              { id: 'low', label: 'Low' },
+              { id: 'medium', label: 'Medium' },
+              { id: 'high', label: 'High' },
+              { id: 'ultra', label: 'Ultra' }
+            ];
+            
+            const formatOptions = [
+              { id: 'webm', label: 'WebM' },
+              { id: 'mp4', label: 'MP4' },
+              { id: 'gif', label: 'GIF' }
+            ];
+            
             const calculateEstimatedTime = () => {
               const baseTimes = { low: 5, medium: 12, high: 20, ultra: 40 }; // seconds per minute
               const formatMultiplier = exportFormat === 'gif' ? 2.0 : (exportFormat === 'mp4' ? 1.2 : 1.0);
