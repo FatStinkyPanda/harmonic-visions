@@ -1,0 +1,16 @@
+FatStinkyPanda Application License
+Copyright (c) 2025 FatStinkyPanda
+
+Permissions
+You may copy, distribute, and modify this application.
+You may use this application for personal or non-commercial purposes.
+You may include this application in non-commercial projects.
+Conditions
+You must include this original license with any copy or modification of the application.
+You must give appropriate credit to FatStinkyPanda as the original creator of this application.
+You must clearly indicate if you have modified the original application.
+Limitations
+You may not sell this application or any derivative works based on it.
+You may not use this application for commercial purposes without explicit permission from the copyright holder.
+You may not sublicense this application or any derivative works.
+THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
