@@ -199,3 +199,5 @@ class VideoExporter {
       }
     }
   }
+
+  window.VideoExporter = VideoExporter;

@@ -1,0 +1,2 @@
+//Rain on Roof/Surface: Distinct sound of rain hitting a surface (like tin or leaves). - ae_ambientRainSurface.js
+//Each ae_*.js file would contain the class responsible for generating and controlling its specific sound, responding to the methods called by the main AudioEngine.js coordinator (init, play, stop, update, changeMood, dispose).

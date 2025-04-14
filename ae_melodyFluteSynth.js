@@ -1,0 +1,2 @@
+//Gentle Flute Synth: Soft, breathy synth lead mimicking a flute. - ae_melodyFluteSynth.js
+//Each ae_*.js file would contain the class responsible for generating and controlling its specific sound, responding to the methods called by the main AudioEngine.js coordinator (init, play, stop, update, changeMood, dispose).

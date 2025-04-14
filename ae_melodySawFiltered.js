@@ -1,0 +1,2 @@
+//Filtered Saw Lead: Classic synth lead sound with filter modulation. - ae_melodySawFiltered.js
+//Each ae_*.js file would contain the class responsible for generating and controlling its specific sound, responding to the methods called by the main AudioEngine.js coordinator (init, play, stop, update, changeMood, dispose).
