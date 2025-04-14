@@ -1,7 +1,7 @@
 // ae_effectHeartbeat.js - Audio Module for Rhythmic Heartbeat Pulse
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.1 (Fixed InvalidStateError on osc.stop)
+// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
 
 /**
  * @class AEEffectHeartbeat
@@ -145,12 +145,6 @@ class AEEffectHeartbeat {
     update(time, mood, visualParams, audioParams, deltaTime) {
         if (!this.isEnabled || !this.isPlaying) return;
         // Could subtly modulate filter cutoff or rateFactor based on dreaminess/intensity
-        // Example:
-        // if (this.filterNode && visualParams?.dreaminess) {
-        //     const baseFreq = this.settings.filterCutoff || 200;
-        //     const drift = Math.sin(time * 0.04 + this.beatIdCounter * 0.05) * 30 * visualParams.dreaminess;
-        //     this.filterNode.frequency.setTargetAtTime(baseFreq + drift, this.audioContext.currentTime, 0.6);
-        // }
     }
 
     /** Start the heartbeat rhythm sequence scheduling. */
@@ -371,19 +365,19 @@ class AEEffectHeartbeat {
     _triggerBeatSequence() {
         if (!this.isPlaying || !this.audioContext) return;
 
-        const beatStartTime = this.nextBeatTime;
+        const beatStartTime = this.nextBeatTime; // Use the scheduled grid time
 
         // Apply timing humanization
         let timingOffset = 0;
         if (this.settings.beatTimingVariation > 0) {
              timingOffset = (Math.random() - 0.5) * 2.0 * this.settings.beatTimingVariation;
         }
-        const actualBeatStartTime = beatStartTime + timingOffset;
+        const intendedBeatStartTime = beatStartTime + timingOffset; // Humanized intended start time
 
-        // Trigger the "lub-dub" pair
-        this._createSingleBeatPair(actualBeatStartTime);
+        // Trigger the "lub-dub" pair, passing the intended start time
+        this._createSingleBeatPair(intendedBeatStartTime);
 
-        // Calculate the start time for the *next* beat sequence
+        // Calculate the start time for the *next* beat sequence based on the grid time
         this.nextBeatTime = beatStartTime + this.beatDuration;
 
         // Schedule the next beat check
@@ -391,9 +385,10 @@ class AEEffectHeartbeat {
     }
 
     /** Creates the "lub" and "dub" sounds for a single heartbeat. */
-    _createSingleBeatPair(startTime) {
-        if (!this.audioContext || !this._beatConnectionPoint || startTime < this.audioContext.currentTime) {
-            console.warn(`${this.MODULE_ID}: Skipping beat creation - invalid time or missing nodes.`);
+    _createSingleBeatPair(startTime) { // startTime is the intended start time
+        // Check nodes *before* proceeding
+        if (!this.audioContext || !this._beatConnectionPoint) {
+            console.warn(`${this.MODULE_ID}: Skipping beat pair creation - missing essential nodes.`);
             return;
         }
 
@@ -407,14 +402,15 @@ class AEEffectHeartbeat {
                 startFreq: this.settings.lubFreqStart + randomPitchMod,
                 endFreq: this.settings.lubFreqEnd + randomPitchMod,
                 pitchDropTime: this.settings.lubPitchDropTime,
-                decayTime: this.settings.lubDecayTime + randomDecayMod,
+                decayTime: Math.max(0.01, this.settings.lubDecayTime + randomDecayMod), // Ensure > 0
                 attackTime: this.settings.attackTime,
-                velocity: this.settings.lubVelocity * randomVelocityMod
+                velocity: Math.max(0.01, this.settings.lubVelocity * randomVelocityMod) // Ensure > 0
             };
+            // Pass the intended start time for the "lub"
             this._createOscillatorEvent(lubParams, startTime, 'lub');
 
             // --- Create "Dub" ---
-            const dubStartTime = startTime + this.settings.lubDubSeparation;
+            const intendedDubStartTime = startTime + this.settings.lubDubSeparation;
             // Use slightly different random mods for variation between lub and dub
             const randomDubPitchMod = (Math.random() - 0.5) * 2.0 * this.settings.pitchVariation;
             const randomDubDecayMod = (Math.random() - 0.5) * 2.0 * this.settings.decayVariation;
@@ -423,25 +419,32 @@ class AEEffectHeartbeat {
                 startFreq: this.settings.dubFreqStart + randomDubPitchMod,
                 endFreq: this.settings.dubFreqEnd + randomDubPitchMod,
                 pitchDropTime: this.settings.dubPitchDropTime,
-                decayTime: this.settings.dubDecayTime + randomDubDecayMod,
+                decayTime: Math.max(0.01, this.settings.dubDecayTime + randomDubDecayMod), // Ensure > 0
                 attackTime: this.settings.attackTime,
-                velocity: this.settings.dubVelocity * randomVelocityMod // Apply same velocity mod for consistency? Or separate? Let's use same for now.
+                velocity: Math.max(0.01, this.settings.dubVelocity * randomVelocityMod) // Use same velocity mod? Yes. Ensure > 0
             };
-             // Ensure dub start time is valid
-             if (dubStartTime >= this.audioContext.currentTime) {
-                  this._createOscillatorEvent(dubParams, dubStartTime, 'dub');
-             } else {
-                  console.warn(`${this.MODULE_ID}: Dub start time (${dubStartTime.toFixed(3)}) is in the past. Skipping dub.`);
-             }
-
+            // Pass the intended start time for the "dub"
+            this._createOscillatorEvent(dubParams, intendedDubStartTime, 'dub');
 
         } catch (error) {
-            console.error(`${this.MODULE_ID}: Error creating beat pair at ${startTime.toFixed(3)}s:`, error);
+            console.error(`${this.MODULE_ID}: Error creating beat pair intended around ${startTime.toFixed(3)}s:`, error);
         }
     }
 
-    /** Creates a single oscillator event (one part of the lub-dub). */
-    _createOscillatorEvent(params, playTime, noteIdPrefix) {
+    /** Creates a single oscillator event (one part of the lub-dub) using lookahead timing. */
+    _createOscillatorEvent(params, playTime, noteIdPrefix) { // playTime is the *intended* start time
+        // --- Calculate Effective Play Time using Lookahead ---
+        const now = this.audioContext.currentTime;
+        const lookahead = 0.05; // 50ms lookahead
+        const effectivePlayTime = now + lookahead;
+
+        // --- Add Robust Node Checks ---
+        if (!this.audioContext || !this._beatConnectionPoint) {
+            console.warn(`${this.MODULE_ID}: Skipping beat part creation - missing essential nodes (context or _beatConnectionPoint).`);
+            return;
+        }
+        // --- End Node Checks ---
+
         let osc = null;
         let envGain = null;
         const beatPartId = `${noteIdPrefix}-${this.beatIdCounter++}`;
@@ -451,33 +454,32 @@ class AEEffectHeartbeat {
             osc.type = 'sine'; // Pure tone for deep pulse
 
             envGain = this.audioContext.createGain();
-            envGain.gain.setValueAtTime(0.0001, playTime);
+            envGain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
 
             osc.connect(envGain);
             envGain.connect(this._beatConnectionPoint);
 
-            // --- Start the oscillator PRECISELY at playTime ---
-            // Moved this *before* scheduling stop and envelopes
-            osc.start(playTime);
-            // --- End Move ---
+            // --- Start the oscillator PRECISELY at effectivePlayTime ---
+            osc.start(effectivePlayTime);
 
             // Apply Pitch Envelope
-            this._applyPitchEnvelope(osc, params.startFreq, params.endFreq, params.pitchDropTime, playTime);
+            this._applyPitchEnvelope(osc, params.startFreq, params.endFreq, params.pitchDropTime, effectivePlayTime);
 
             // Apply Amplitude Envelope
-            this._applyAmplitudeEnvelope(envGain, params.attackTime, params.decayTime, params.velocity, playTime);
+            this._applyAmplitudeEnvelope(envGain, params.attackTime, params.decayTime, params.velocity, effectivePlayTime);
 
             // Schedule Oscillator Stop
-            const stopTime = playTime + params.attackTime + params.decayTime + 0.15; // Stop well after decay
-            osc.stop(stopTime); // Now safe to schedule stop
+            const stopTime = effectivePlayTime + params.attackTime + params.decayTime + 0.15; // Stop well after decay
+            try {
+                osc.stop(stopTime); // Schedule stop
+            } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error scheduling oscillator stop for ${beatPartId}:`, e); }
+
 
             // Schedule Cleanup
-            const cleanupDelay = (stopTime - this.audioContext.currentTime + 0.1) * 1000;
+            const cleanupDelay = (stopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
             const cleanupTimeoutId = setTimeout(() => this._cleanupBeatSound(beatPartId), Math.max(50, cleanupDelay));
 
             this.activeBeats.set(beatPartId, { osc, envGain, cleanupTimeoutId, isStopping: false });
-
-            // --- MOVED: osc.start(playTime); --- was here
 
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error creating beat part ${beatPartId}:`, error);
@@ -490,12 +492,14 @@ class AEEffectHeartbeat {
         }
     }
 
+
     /** Applies pitch envelope to an oscillator. */
     _applyPitchEnvelope(osc, startFreq, endFreq, dropTime, startTime) {
         if (!osc || !osc.frequency) return;
         const freqParam = osc.frequency;
         const clampedEndFreq = Math.max(20, endFreq); // Ensure frequency stays audible/valid
         const clampedStartFreq = Math.max(clampedEndFreq, startFreq); // Ensure start >= end
+        const now = this.audioContext.currentTime; // Get current time for immediate set
 
         try {
              // Use cancelAndHoldAtTime if available for robustness against overlapping calls
@@ -504,8 +508,9 @@ class AEEffectHeartbeat {
              } else {
                  freqParam.cancelScheduledValues(startTime);
              }
-            freqParam.setValueAtTime(clampedStartFreq, startTime);
-            freqParam.exponentialRampToValueAtTime(clampedEndFreq, startTime + dropTime);
+             // Set initial value slightly before start time if possible
+            freqParam.setValueAtTime(clampedStartFreq, Math.max(now, startTime - 0.001));
+            freqParam.exponentialRampToValueAtTime(clampedEndFreq, startTime + Math.max(0.001, dropTime)); // Ensure duration > 0
         } catch (e) {
              console.error(`${this.MODULE_ID}: Error applying pitch envelope:`, e);
              // Fallback to immediate set if ramp fails?
@@ -518,6 +523,8 @@ class AEEffectHeartbeat {
         if (!gainNode || !gainNode.gain) return;
         const gainParam = gainNode.gain;
         const clampedVelocity = Math.max(0.001, Math.min(1.0, velocity)); // Clamp velocity 0.001-1.0
+        const decayTimeConstant = Math.max(0.001, decay / 3.0); // Ensure time constant > 0
+        const attackTime = Math.max(0.001, attack); // Ensure attack time > 0
 
         try {
              // Use cancelAndHoldAtTime if available
@@ -527,9 +534,9 @@ class AEEffectHeartbeat {
                  gainParam.cancelScheduledValues(startTime);
              }
             gainParam.setValueAtTime(0.0001, startTime);
-            gainParam.linearRampToValueAtTime(clampedVelocity, startTime + attack);
+            gainParam.linearRampToValueAtTime(clampedVelocity, startTime + attackTime);
             // Exponential decay starts immediately after attack peak
-            gainParam.setTargetAtTime(0.0001, startTime + attack, decay / 3.0); // Decay time constant
+            gainParam.setTargetAtTime(0.0001, startTime + attackTime, decayTimeConstant);
         } catch (e) {
              console.error(`${this.MODULE_ID}: Error applying amplitude envelope:`, e);
              // Fallback to setting a value if ramps fail

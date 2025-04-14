@@ -1,7 +1,7 @@
 // ae_ambientWaterDrips.js - Audio Module for Occasional Echoing Water Drips
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.1 (Fixed InvalidStateError on osc.stop)
+// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
 
 /**
  * @class AEAmbientWaterDrips
@@ -27,7 +27,8 @@ class AEAmbientWaterDrips {
         this.feedbackGain = null;     // Controls delay feedback (number of echoes)
         this.wetGain = null;          // Controls the volume of the delayed (wet) signal
         this.dryGain = null;          // Controls the volume of the direct (dry) signal feeding moduleOutputGain
-        this._beatConnectionPoint = null; // Internal reference for connection point (used in Heartbeat, kept naming convention)
+        // Note: _beatConnectionPoint naming kept for consistency, but it's the pre-delay split point here.
+        this._beatConnectionPoint = null;
 
         // --- Sequencing State ---
         this.sequenceTimeoutId = null; // Timeout ID for scheduling the next drip check
@@ -48,7 +49,7 @@ class AEAmbientWaterDrips {
             dripWaveform: 'sine',     // Sine or triangle often work well
             dripFrequencyMin: 800,    // Base frequency minimum (Hz) - higher pitch range
             dripFrequencyMax: 2600,   // Base frequency maximum (Hz)
-            dripDuration: 0.01,       // Very short base duration (attack peak time)
+            dripDuration: 0.01,       // Very short base duration (attack peak time) - Note: This is less critical now envelope controls duration feel
             dripAttackTime: 0.001,    // Extremely fast attack (almost instant click)
             dripReleaseTimeMin: 0.06, // Fast but slightly resonant release (s)
             dripReleaseTimeMax: 0.22, // Range for release variation
@@ -131,8 +132,8 @@ class AEAmbientWaterDrips {
             this.moduleOutputGain.connect(this.masterOutput);
 
             // Set the connection point for individual drips (this should be before the delay split)
-            // This isn't explicitly used in the current createSingleDrip logic, but kept for potential refactoring.
-            this._beatConnectionPoint = this.dryGain; // Drips connect here before splitting to dry/wet
+            // Drips created via _createSingleDrip connect to this node.
+            this._beatConnectionPoint = this.dryGain; // Drips connect here before splitting to dry/wet (via preDelayGain)
 
             this.isEnabled = true;
             console.log(`${this.MODULE_ID}: Initialization complete.`);
@@ -153,10 +154,6 @@ class AEAmbientWaterDrips {
         if (!this.isEnabled || !this.isPlaying) return;
         // Potential subtle drift: Could slightly modulate the base densityFactor or echoFactor
         // over very long periods based on 'time' or 'dreaminess' for extra variation.
-        // Example:
-        // const baseDensity = this.settings.densityFactor || 1.0;
-        // const drift = Math.sin(time * 0.005 + this.dripIdCounter * 0.05) * 0.05; // Very slow drift
-        // this.currentDensityFactor = baseDensity + drift; // Store internally for use in scheduling
     }
 
     /** Start the water drip sequence scheduling. */
@@ -400,8 +397,11 @@ class AEAmbientWaterDrips {
         this.sequenceTimeoutId = setTimeout(() => {
             if (!this.isPlaying) return; // Check state again inside timeout
             try {
-                this.nextDripTime = this.audioContext.currentTime; // Update time for this drip start
-                this._triggerDrip(); // Generate the drip sound
+                // Get the *intended* start time for this drip (which is the scheduled time)
+                const intendedStartTime = scheduledTime;
+                // Update nextDripTime for the *next* scheduling cycle based on when this one *should* have started
+                this.nextDripTime = intendedStartTime;
+                this._triggerDrip(intendedStartTime); // Pass the intended start time
             } catch (e) {
                 console.error(`${this.MODULE_ID}: Error in _triggerDrip:`, e);
                 this.stop(this.audioContext.currentTime); // Stop sequence on error
@@ -410,7 +410,7 @@ class AEAmbientWaterDrips {
     }
 
     /** Triggers a single drip sound and schedules the next one. */
-    _triggerDrip() {
+    _triggerDrip(intendedStartTime) { // Accept intended start time
         if (!this.isPlaying || !this.audioContext) return;
 
         // Calculate parameters for this specific drip
@@ -430,22 +430,27 @@ class AEAmbientWaterDrips {
         const releaseTime = releaseMin + Math.random() * (releaseMax - releaseMin);
 
         const dripParams = { frequency, volume, pan, releaseTime };
-        const dripStartTime = this.nextDripTime; // Use the updated time
+        // Pass the intended start time to the creation function
+        this._createSingleDrip(dripParams, intendedStartTime);
 
-        // console.debug(`${this.MODULE_ID}: Triggering drip at ${dripStartTime.toFixed(3)}s`);
-        this._createSingleDrip(dripParams, dripStartTime);
-
-        // Schedule the *next* drip check after this one is triggered
+        // Schedule the *next* drip check based on the updated nextDripTime
         this._scheduleNextDrip();
     }
 
 
-    /** Creates and plays a single synthesized water drip sound. */
-    _createSingleDrip(params, playTime) {
-        if (!this.audioContext || !this.moduleOutputGain || !this.dryGain || !this.delayNode || playTime < this.audioContext.currentTime) {
-             console.warn(`${this.MODULE_ID}: Skipping drip creation - invalid time or missing nodes.`);
-             return;
+    /** Creates and plays a single synthesized water drip sound using lookahead timing. */
+    _createSingleDrip(params, playTime) { // playTime is the *intended* start time
+        // --- Calculate Effective Play Time using Lookahead ---
+        const now = this.audioContext.currentTime;
+        const lookahead = 0.05; // 50ms lookahead
+        const effectivePlayTime = now + lookahead;
+
+        // --- Add Robust Node Checks ---
+        if (!this.audioContext || !this.moduleOutputGain || !this.dryGain || !this.delayNode) {
+            console.warn(`${this.MODULE_ID}: Skipping drip creation - missing essential nodes (context, outputGain, dryGain, or delayNode).`);
+            return;
         }
+        // --- End Node Checks ---
 
         let osc = null;
         let envGain = null;
@@ -457,16 +462,17 @@ class AEAmbientWaterDrips {
             // --- Create Nodes ---
             osc = this.audioContext.createOscillator();
             osc.type = this.settings.dripWaveform || 'sine';
-            osc.frequency.setValueAtTime(params.frequency, playTime);
+            // Set frequency slightly before effectivePlayTime
+            osc.frequency.setValueAtTime(params.frequency, Math.max(now, effectivePlayTime - 0.001));
 
             envGain = this.audioContext.createGain(); // Controls the ADSR envelope
-            envGain.gain.setValueAtTime(0.0001, playTime); // Start silent
+            envGain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
 
             panner = this.audioContext.createStereoPanner();
-            panner.pan.setValueAtTime(params.pan, playTime);
+            panner.pan.setValueAtTime(params.pan, effectivePlayTime); // Schedule pan at effective time
 
             preDelayGain = this.audioContext.createGain(); // Controls overall level before echo split
-            preDelayGain.gain.setValueAtTime(params.volume, playTime); // Set randomized volume
+            preDelayGain.gain.setValueAtTime(params.volume, effectivePlayTime); // Schedule gain at effective time
 
             // Connect nodes: Osc -> EnvGain -> Panner -> PreDelayGain
             osc.connect(envGain);
@@ -477,29 +483,30 @@ class AEAmbientWaterDrips {
             preDelayGain.connect(this.dryGain);    // Connect to Dry path gain
             preDelayGain.connect(this.delayNode); // Connect to Wet path delay input
 
-            // --- Start the oscillator PRECISELY at playTime ---
-            // Moved this *before* scheduling stop and envelopes
-            osc.start(playTime);
-            // --- End Move ---
+            // --- Start the oscillator PRECISELY at effectivePlayTime ---
+            osc.start(effectivePlayTime);
 
             // --- Apply Envelope (Fast Attack, Fast Decay/Release) ---
             const attack = this.settings.dripAttackTime || 0.001;
-            const release = params.releaseTime; // Use randomized release time
+            const release = Math.max(0.01, params.releaseTime); // Use randomized release time, ensure > 0
             const peakVolume = 1.0; // Envelope gain controls shape, preDelayGain controls level
             const gainParam = envGain.gain;
 
             // Attack Phase (Very fast linear ramp to peak)
-            gainParam.linearRampToValueAtTime(peakVolume, playTime + attack);
+            gainParam.linearRampToValueAtTime(peakVolume, effectivePlayTime + attack);
 
             // Release Phase (Exponential decay starting immediately after attack peak)
-            const releaseStartTime = playTime + attack;
+            const releaseStartTime = effectivePlayTime + attack;
             // Use time constant based on the randomized release time
             gainParam.setTargetAtTime(0.0001, releaseStartTime, release / 3.0);
 
             // --- Schedule Node Stop ---
             // Stop time is after the note's attack AND the release phase completes
             const stopTime = releaseStartTime + release + 0.1; // Add buffer
-            osc.stop(stopTime); // Now safe to schedule stop
+             try {
+                 osc.stop(stopTime); // Schedule stop
+             } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error scheduling oscillator stop for drip ${dripId}:`, e); }
+
 
             // --- Schedule Cleanup ---
             const cleanupDelay = (stopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
@@ -509,8 +516,6 @@ class AEAmbientWaterDrips {
 
             // --- Store Active Drip ---
             this.activeDrips.set(dripId, { osc, envGain, panner, preDelayGain, cleanupTimeoutId, isStopping: false });
-
-            // --- MOVED: osc.start(playTime); --- was here
 
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error creating drip ${dripId}:`, error);

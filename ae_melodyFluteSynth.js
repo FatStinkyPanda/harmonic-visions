@@ -1,7 +1,7 @@
 // ae_melodyFluteSynth.js - Audio Module for Gentle Flute-like Synth Melodies
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.1.1 (Fixed InvalidStateError on osc.stop/noiseSource.stop)
+// Version: 1.1.2 (Fixed timing issues with lookahead scheduling)
 
 /**
  * @class AEMelodyFluteSynth
@@ -164,7 +164,7 @@ class AEMelodyFluteSynth {
             if (typeof ToastSystem !== 'undefined') {
                 ToastSystem.notify('error', `Flute Synth init failed: ${error.message}`);
             }
-            this.dispose(scene); // Pass scene if available, though not strictly needed here
+            this.dispose(); // Pass scene if available, though not strictly needed here
             this.isEnabled = false;
         }
     }
@@ -260,10 +260,10 @@ class AEMelodyFluteSynth {
 
                      // --- Reschedule Cleanup ---
                      if (noteData.cleanupTimeoutId) clearTimeout(noteData.cleanupTimeoutId);
-                     const cleanupDelay = (nodeStopTime - this.audioContext.currentTime + 0.1) * 1000;
+                     const cleanupDelay = (nodeStopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
                      noteData.cleanupTimeoutId = setTimeout(() => {
                           this._cleanupNote(noteId);
-                     }, Math.max(100, cleanupDelay));
+                     }, Math.max(100, cleanupDelay)); // Ensure minimum delay
                  }
             });
 
@@ -403,14 +403,16 @@ class AEMelodyFluteSynth {
         const beatDuration = 60.0 / tempo;
         const noteDurationSeconds = (patternItem.duration || 1.0) * beatDuration;
         const isRest = patternItem.isRest || false;
-        const noteStartTime = this.nextNoteStartTime;
+        const noteStartTime = this.nextNoteStartTime; // Intended start time
         let timingOffset = (this.settings.humanizeTiming || 0) * (Math.random() - 0.5) * 2.0;
-        const actualNoteStartTime = noteStartTime + timingOffset;
+        const intendedPlayTime = noteStartTime + timingOffset; // Humanized intended start time
 
         if (!isRest) {
-            this._createNote(patternItem, actualNoteStartTime, noteDurationSeconds);
+             // Pass the intended time, _createNote handles lookahead
+            this._createNote(patternItem, intendedPlayTime, noteDurationSeconds);
         }
-        this.nextNoteStartTime = noteStartTime + noteDurationSeconds; // Calculate next start BEFORE pattern advance
+        // Calculate next grid time based on UN-humanized start time
+        this.nextNoteStartTime = noteStartTime + noteDurationSeconds;
         this.currentPatternIndex++;
         if (this.currentPatternIndex >= this.currentPattern.length) {
             this.currentPatternIndex = 0;
@@ -421,12 +423,19 @@ class AEMelodyFluteSynth {
         this._scheduleNextNoteCheck();
     }
 
-    /** Creates and plays a single flute synth note. */
+    /** Creates and plays a single flute synth note using lookahead timing. */
     _createNote(noteInfo, playTime, durationSeconds) {
-        if (!this.audioContext || !this.moduleFilter || !this.noiseBuffer || playTime < this.audioContext.currentTime) {
-             console.warn(`${this.MODULE_ID}: Skipping note creation - invalid time or missing nodes/buffer.`);
-             return;
+        // --- Calculate Effective Play Time using Lookahead ---
+        const now = this.audioContext.currentTime;
+        const lookahead = 0.05; // 50ms lookahead
+        const effectivePlayTime = now + lookahead;
+
+        // --- Add Robust Node Checks ---
+        if (!this.audioContext || !this.moduleFilter || !this.noiseBuffer || !this.vibratoGain) {
+            console.warn(`${this.MODULE_ID}: Skipping note creation - missing essential nodes/buffer (context, filter, noiseBuffer, or vibratoGain).`);
+            return;
         }
+        // --- End Node Checks ---
 
         let toneOsc = null, noiseSource = null, breathFilter = null, toneGain = null, breathGain = null;
         const noteId = `flute-${this.noteIdCounter++}`;
@@ -441,12 +450,12 @@ class AEMelodyFluteSynth {
             // --- Create Tone Oscillator ---
             toneOsc = this.audioContext.createOscillator();
             toneOsc.type = this.settings.toneWaveform || 'triangle';
-            toneOsc.frequency.setValueAtTime(frequency, playTime);
+            toneOsc.frequency.setValueAtTime(frequency, Math.max(now, effectivePlayTime - 0.001)); // Set slightly before
             if (this.vibratoGain && toneOsc.detune) {
                 try { this.vibratoGain.connect(toneOsc.detune); } catch (e) {}
             }
             toneGain = this.audioContext.createGain();
-            toneGain.gain.setValueAtTime(0.0001, playTime);
+            toneGain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
             toneOsc.connect(toneGain);
             toneGain.connect(this.moduleFilter); // Connect to module filter
 
@@ -458,20 +467,17 @@ class AEMelodyFluteSynth {
             breathFilter.type = this.settings.breathFilterType || 'bandpass';
             const bfFreq = (this.settings.breathFilterFreqBase || 1800) + (Math.random() - 0.5) * (this.settings.breathFilterFreqRange || 800);
             const bfQ = (this.settings.breathFilterQBase || 1.5) + (Math.random() - 0.5) * (this.settings.breathFilterQRange || 1.0);
-            breathFilter.frequency.setValueAtTime(Math.max(100, bfFreq), playTime); // Clamp freq
-            breathFilter.Q.setValueAtTime(Math.max(0.1, bfQ), playTime); // Clamp Q
+            breathFilter.frequency.setValueAtTime(Math.max(100, bfFreq), Math.max(now, effectivePlayTime - 0.001)); // Set slightly before
+            breathFilter.Q.setValueAtTime(Math.max(0.1, bfQ), Math.max(now, effectivePlayTime - 0.001)); // Set slightly before
             breathGain = this.audioContext.createGain();
-            breathGain.gain.setValueAtTime(0.0001, playTime);
+            breathGain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
             noiseSource.connect(breathFilter);
             breathFilter.connect(breathGain);
             breathGain.connect(this.moduleFilter); // Connect to module filter
 
-            // --- Start Nodes PRECISELY at playTime ---
-            // Moved *before* scheduling stop and envelopes
-            toneOsc.start(playTime);
-            noiseSource.start(playTime);
-            // --- End Move ---
-
+            // --- Start Nodes PRECISELY at effectivePlayTime ---
+            toneOsc.start(effectivePlayTime);
+            noiseSource.start(effectivePlayTime);
 
             // --- Apply Envelopes ---
             const velocity = Math.max(0.1, Math.min(1.0, (noteInfo.velocity || this.settings.noteVelocityBase) * (1.0 + (Math.random() - 0.5) * 2.0 * this.settings.noteVelocityRange)));
@@ -479,14 +485,17 @@ class AEMelodyFluteSynth {
             const { breathAttackTime, breathDecayTime, breathSustainLevel, breathReleaseTime, breathNoiseVolume } = this.settings;
 
             // Tone Envelope
-            toneGain.gain.linearRampToValueAtTime(velocity, playTime + attackTime);
-            toneGain.gain.setTargetAtTime(velocity * sustainLevel, playTime + attackTime, decayTime / 3.0);
+            toneGain.gain.linearRampToValueAtTime(velocity, effectivePlayTime + attackTime);
+            toneGain.gain.setTargetAtTime(velocity * sustainLevel, effectivePlayTime + attackTime, decayTime / 3.0);
             // Breath Envelope
-            breathGain.gain.linearRampToValueAtTime(velocity * breathNoiseVolume, playTime + breathAttackTime);
-            breathGain.gain.setTargetAtTime(velocity * breathNoiseVolume * breathSustainLevel, playTime + breathAttackTime, breathDecayTime / 3.0);
+            breathGain.gain.linearRampToValueAtTime(velocity * breathNoiseVolume, effectivePlayTime + breathAttackTime);
+            breathGain.gain.setTargetAtTime(velocity * breathNoiseVolume * breathSustainLevel, effectivePlayTime + breathAttackTime, breathDecayTime / 3.0);
 
             // --- Schedule Release and Stop ---
-            const releaseStartTime = playTime + durationSeconds;
+            const intendedReleaseStartTime = playTime + durationSeconds; // Base release on original intended time
+            // Ensure release starts after the effective attack+decay phases
+            const releaseStartTime = Math.max(effectivePlayTime + Math.max(attackTime + decayTime, breathAttackTime + breathDecayTime), intendedReleaseStartTime);
+
             toneGain.gain.setTargetAtTime(0.0001, releaseStartTime, releaseTime / 3.0);
             breathGain.gain.setTargetAtTime(0.0001, releaseStartTime, breathReleaseTime / 3.0);
 
@@ -494,18 +503,15 @@ class AEMelodyFluteSynth {
             const breathStopTime = releaseStartTime + breathReleaseTime + 0.1;
             const latestStopTime = Math.max(toneStopTime, breathStopTime);
 
-            toneOsc.stop(toneStopTime); // Now safe to schedule stop
-            noiseSource.stop(breathStopTime); // Noise source also needs stopping
+            try { toneOsc.stop(toneStopTime); } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error stopping toneOsc ${noteId}:`, e); }
+            try { noiseSource.stop(breathStopTime); } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error stopping noiseSource ${noteId}:`, e); }
 
             // --- Schedule Cleanup ---
-            const cleanupDelay = (latestStopTime - this.audioContext.currentTime + 0.1) * 1000;
+            const cleanupDelay = (latestStopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
             const cleanupTimeoutId = setTimeout(() => this._cleanupNote(noteId), Math.max(50, cleanupDelay));
 
             // --- Store Active Note ---
             this.activeNotes.set(noteId, { toneOsc, noiseSource, breathFilter, toneGain, breathGain, cleanupTimeoutId, isStopping: false });
-
-            // --- MOVED: toneOsc.start(playTime); ---
-            // --- MOVED: noiseSource.start(playTime); ---
 
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error creating note ${noteId}:`, error);
@@ -517,6 +523,7 @@ class AEMelodyFluteSynth {
             }
         }
     }
+
 
     /** Cleans up resources associated with a finished or stopped note. */
     _cleanupNote(noteId) {
@@ -533,9 +540,9 @@ class AEMelodyFluteSynth {
              if (noteData.toneGain) try { noteData.toneGain.disconnect(); } catch (e) {}
              if (noteData.breathGain) try { noteData.breathGain.disconnect(); } catch (e) {}
         } catch (e) {
-             console.error(`${this.MODULE_ID}: Error disconnecting nodes for note ${noteId}:`, e);
+             console.warn(`${this.MODULE_ID}: Error disconnecting nodes for note ${noteId}:`, e);
         } finally {
-             if (noteData.cleanupTimeoutId) clearTimeout(noteData.cleanupTimeoutId);
+             if (noteData.cleanupTimeoutId) clearTimeout(noteData.cleanupTimeoutId); // Clear timeout just in case
              this.activeNotes.delete(noteId);
         }
     }
@@ -551,6 +558,10 @@ class AEMelodyFluteSynth {
              if (noteData.breathFilter) try { noteData.breathFilter.disconnect(); } catch(e){}
              if (noteData.toneGain) try { noteData.toneGain.disconnect(); } catch(e){}
              if (noteData.breathGain) try { noteData.breathGain.disconnect(); } catch(e){}
+             // Disconnect vibrato as well
+             if (this.vibratoGain && noteData.toneOsc && noteData.toneOsc.detune) {
+                 try { this.vibratoGain.disconnect(noteData.toneOsc.detune); } catch(e) {}
+             }
          } catch (e) {
              console.error(`${this.MODULE_ID}: Error during force cleanup for note ${noteId}:`, e);
          } finally {
@@ -562,6 +573,10 @@ class AEMelodyFluteSynth {
      _cleanupPartialNote(nodes) {
           console.warn(`${this.MODULE_ID}: Cleaning up partially created note nodes.`);
           const { toneOsc, noiseSource, breathFilter, toneGain, breathGain } = nodes;
+          // Disconnect vibrato if it might have been connected
+          if (this.vibratoGain && toneOsc && toneOsc.detune) {
+              try { this.vibratoGain.disconnect(toneOsc.detune); } catch(e) {}
+          }
           if (toneOsc) try { toneOsc.disconnect(); } catch(e){}
           if (noiseSource) try { noiseSource.disconnect(); } catch(e){}
           if (breathFilter) try { breathFilter.disconnect(); } catch(e){}
