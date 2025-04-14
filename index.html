@@ -628,13 +628,18 @@
 
       const ToastContainer = () => {
         const [toasts, setToasts] = React.useState([]);
+
         React.useEffect(() => {
           let unsubscribe = null;
-          if (typeof ToastSystem !== 'undefined' && ToastSystem.subscribe) {
+          // --- FIX: Check if ToastSystem and subscribe are ready ---
+          if (typeof ToastSystem !== 'undefined' && typeof ToastSystem.subscribe === 'function') {
             unsubscribe = ToastSystem.subscribe(setToasts);
+            console.log("ToastContainer: Subscribed to ToastSystem."); // Added log
           } else {
-            console.warn("ToastSystem not ready for subscription on mount.");
-            // Retry mechanism could be added here if needed
+            // Log if not ready, it should become available shortly after initial render
+            console.warn("ToastContainer: ToastSystem.subscribe not available on initial mount, will attempt on next render.");
+            // You could implement a retry with setTimeout here if needed, but often not necessary
+            // with correct script load order.
           }
           return () => {
               if (unsubscribe) {
@@ -808,6 +813,7 @@
 
           React.useEffect(() => {
               if (isVisible) {
+                  setIsFadingOut(false); // Ensure not fading out if re-triggered
                   // Clear any existing timeouts
                   if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
@@ -819,6 +825,10 @@
                           onComplete(); // Notify parent that the hint cycle is done
                       }, 700); // Matches fade-out duration in CSS
                   }, 3000); // Display duration before fading
+              } else {
+                   // If visibility is turned off externally, clear timeout and reset fade state
+                   if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                   setIsFadingOut(false);
               }
 
               // Cleanup timeout on unmount or if isVisible becomes false early
@@ -856,7 +866,7 @@
         const [isLoading, setIsLoading] = React.useState(false);
         const [uiVisible, setUiVisible] = React.useState(true);
         const [showDisclaimerInApp, setShowDisclaimerInApp] = React.useState(false);
-        const [experienceInitialized, setExperienceInitialized] = React.useState(false);
+        const [experienceInitialized, setExperienceInitialized] = React.useState(false); // Track initialization status
         // State for the look around hint
         const [showLookAroundHint, setShowLookAroundHint] = React.useState(false);
         const hintShownRef = React.useRef(false); // Track if hint has been shown this session
@@ -876,131 +886,163 @@
         const availableQualityOptions = (typeof qualityOptions !== 'undefined' && Array.isArray(qualityOptions)) ? qualityOptions : [{ id: 'high', label: 'High' }];
         const availableFormatOptions = (typeof formatOptions !== 'undefined' && Array.isArray(formatOptions)) ? formatOptions : [{ id: 'webm', label: 'WebM' }];
 
-        // Effect for initial loading state
+        // Effect for initial loading state and cleanup
         React.useEffect(() => {
           console.log("React app mounted");
           window.reactReady = true;
+          // Ensure loader hides if dependencies are already loaded when React mounts
           if (window.dependenciesLoaded && typeof window.hideInitialLoader === 'function') {
             hideInitialLoader();
           }
+          // Cleanup function for when the App unmounts
           return () => {
               console.log("React App unmounting - disposing resources...");
               window.reactReady = false;
+              // Use optional chaining ?. for safer disposal calls
               audioEngineRef.current?.dispose();
               visualCanvasRef.current?.dispose();
+              // Clear refs
               audioEngineRef.current = null;
               visualCanvasRef.current = null;
               audioConnectorRef.current = null;
               videoExporterRef.current = null;
+              // Clear any pending timers
+              if (exportTimerRef.current) clearInterval(exportTimerRef.current);
+              if (uiVisibilityTimeoutRef.current) clearTimeout(uiVisibilityTimeoutRef.current);
           };
-        }, []);
+        }, []); // Empty dependency array means this runs only once on mount and cleanup on unmount
 
-        // Handle HTML disclaimer sync
-        React.useEffect(() => {
+        // Handle HTML disclaimer sync with React state
+         React.useEffect(() => {
              if (!showOnboarding && experienceInitialized) {
+                 // Hide HTML disclaimer once experience is ready and onboarding is dismissed
                  const htmlDisclaimer = document.getElementById('disclaimer-banner');
                  if (htmlDisclaimer && !htmlDisclaimer.classList.contains('hidden')) {
                      htmlDisclaimer.classList.add('hidden');
                      document.documentElement.style.setProperty('--disclaimer-height', '0px');
                  }
+                 // Show the React disclaimer only after experience is initialized
                  setShowDisclaimerInApp(true);
              } else {
+                 // Hide React disclaimer if onboarding is shown or not initialized
                  setShowDisclaimerInApp(false);
              }
          }, [showOnboarding, experienceInitialized]);
 
         // --- Initialize the experience ---
+        // Use useCallback to memoize the function unless dependencies change
         const initializeExperience = React.useCallback(() => {
-            if (experienceInitialized) return;
+            if (experienceInitialized) {
+                 console.log("App: Experience already initialized.");
+                 return; // Prevent re-initialization
+            }
             console.log("App: Initializing experience...");
-            setIsLoading(true);
+            setIsLoading(true); // Show loading indicator during init
 
             let errorOccurred = false;
-            const checkDependency = (depName, depVar) => { /* ... (keep dependency check logic) ... */ };
-             // Add checks for all dependencies...
-             checkDependency('AudioEngine', window.AudioEngine);
-             checkDependency('AudioVisualConnector', window.AudioVisualConnector);
-             checkDependency('VisualCanvas', window.VisualCanvas);
-             checkDependency('VideoExporter', window.VideoExporter);
-             checkDependency('EmotionAudioModules', window.EmotionAudioModules);
-             checkDependency('EmotionVisualModules', window.EmotionVisualModules);
-             checkDependency('AEPads', window.AEPads);
-             checkDependency('VCLighting', window.VCLighting);
+            // Helper to check if a dependency exists on the window object
+            const checkDependency = (depName, depVar) => {
+                 if (typeof depVar !== 'function' && typeof depVar !== 'object') { // Check for classes or singleton objects
+                      console.error(`App: Dependency missing - ${depName}`);
+                      if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Initialization Error: ${depName} not loaded.`);
+                      errorOccurred = true;
+                      return false;
+                 }
+                 return true;
+            };
 
+            // Check all critical dependencies before proceeding
+            let dependenciesOk = true;
+            dependenciesOk = checkDependency('AudioEngine', window.AudioEngine) && dependenciesOk;
+            dependenciesOk = checkDependency('AudioVisualConnector', window.AudioVisualConnector?.getInstance) && dependenciesOk; // Check getInstance for singleton
+            dependenciesOk = checkDependency('VisualCanvas', window.VisualCanvas) && dependenciesOk;
+            dependenciesOk = checkDependency('VideoExporter', window.VideoExporter) && dependenciesOk;
+            dependenciesOk = checkDependency('EmotionAudioModules', window.EmotionAudioModules) && dependenciesOk;
+            dependenciesOk = checkDependency('EmotionVisualModules', window.EmotionVisualModules) && dependenciesOk;
+            // Check a few key modules as samples
+            dependenciesOk = checkDependency('AEPads', window.AEPads) && dependenciesOk;
+            dependenciesOk = checkDependency('VCLighting', window.VCLighting) && dependenciesOk;
 
             if (!canvasRef.current) {
                  console.error("App: Canvas ref not available.");
                  if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Initialization Error: Canvas not ready.');
                  errorOccurred = true;
             }
-            if (errorOccurred) {
+
+            if (!dependenciesOk || errorOccurred) {
                  setIsLoading(false);
                  if (typeof window.showErrorScreen === 'function') {
-                      window.showErrorScreen('Core application files failed to load. Please check the console and refresh.');
+                      window.showErrorScreen('Core application files failed to load or canvas missing. Please check the console and refresh.');
                  }
-                 return;
+                 return; // Stop initialization
              }
 
+            // --- Proceed with Initialization ---
             try {
-                // 1. Init AudioEngine (Start paused)
-                audioEngineRef.current = new AudioEngine(false, volume, currentMood);
+                // 1. Init AudioEngine (Start logically paused, use initial state from constructor)
+                // Pass the *initial* state from App's state, AudioEngine constructor handles it
+                audioEngineRef.current = new AudioEngine(isPlaying, volume, currentMood);
                 console.log("App: AudioEngine initialized.");
 
                 // 2. Init Connector and link AudioEngine
-                if (typeof AudioVisualConnector.getInstance !== 'function') throw new Error("AudioVisualConnector is not ready.");
                 audioConnectorRef.current = AudioVisualConnector.getInstance();
                 audioConnectorRef.current.setAudioEngine(audioEngineRef.current);
                 audioConnectorRef.current.setMood(currentMood);
                 console.log("App: AudioVisualConnector initialized and linked.");
 
                 // 3. Init VisualCanvas
-                visualCanvasRef.current = new VisualCanvas(canvasRef.current, currentMood);
+                visualCanvasRef.current = new VisualCanvas(canvasRef.current, currentMood); // Pass initial mood
                 console.log("App: VisualCanvas initialized.");
 
-                // 4. Init VideoExporter
+                // 4. Init VideoExporter (Check for required audio nodes)
                  if (audioEngineRef.current?.audioContext && audioEngineRef.current?.masterAnalyser) {
                      videoExporterRef.current = new VideoExporter(
                          canvasRef.current,
                          audioEngineRef.current.audioContext,
-                         audioEngineRef.current.masterAnalyser
+                         audioEngineRef.current.masterAnalyser // Pass analyser directly
                      );
                      console.log("App: VideoExporter initialized.");
                  } else {
-                     console.warn("App: VideoExporter could not be initialized.");
-                     if (typeof ToastSystem !== 'undefined') ToastSystem.notify('warning', 'Video Exporter init failed.');
+                     console.warn("App: VideoExporter could not be initialized (AudioContext or Analyser missing).");
+                     if (typeof ToastSystem !== 'undefined') ToastSystem.notify('warning', 'Video Exporter init failed (audio not ready).');
                  }
 
-                setExperienceInitialized(true);
+                setExperienceInitialized(true); // Mark initialization complete
+                console.log("App: Experience initialization successful.");
 
                 // --- Start Playback Attempt ---
+                // Delay slightly to allow React state update and rendering
                 setTimeout(() => {
-                    setIsLoading(false);
-                    const tryStartPlaying = async () => {
-                        if (!audioEngineRef.current) return;
-                        if (audioEngineRef.current.audioContext?.state === 'suspended') {
-                             console.log("App: Attempting to resume suspended AudioContext...");
-                             try {
-                                 await audioEngineRef.current.audioContext.resume();
-                                 console.log("App: AudioContext resumed by initialization.");
-                                 setIsPlaying(true); // Trigger play via useEffect
-                             } catch(e) {
-                                 console.error("App: Error resuming audio context:", e);
-                                 if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Could not start audio automatically. Click Play.');
-                             }
-                        } else if (audioEngineRef.current.audioContext?.state === 'running') {
-                             setIsPlaying(true); // Trigger play via useEffect
-                        } else {
-                             console.warn("App: AudioContext not ready for auto-play:", audioEngineRef.current.audioContext?.state);
+                    setIsLoading(false); // Hide loading indicator now
+                    const engine = audioEngineRef.current;
+                    if (!engine || !engine.audioContext) {
+                        console.error("App: AudioEngine not available for post-init audio check.");
+                        return;
+                    }
+
+                    if (engine.audioContext.state === 'suspended') {
+                        console.log("App: AudioContext suspended after init. User interaction needed.");
+                        if (typeof ToastSystem !== 'undefined') {
+                             ToastSystem.notify('info', 'Click Play or tap screen to start audio.');
                         }
-                    };
-                    tryStartPlaying();
-                }, 1500);
+                        // Ensure isPlaying state reflects that audio is NOT running yet
+                        setIsPlaying(false);
+                    } else if (engine.audioContext.state === 'running') {
+                        console.log("App: AudioContext running after init. Setting to play.");
+                        // Set isPlaying state to true, the useEffect hook will handle calling engine.setPlaying
+                        setIsPlaying(true);
+                    } else {
+                        console.warn(`App: AudioContext state is unexpected ('${engine.audioContext.state}') after init.`);
+                        setIsPlaying(false); // Default to paused if state is weird
+                    }
+                }, 100); // Short delay
 
             } catch (error) {
                 console.error("App: CRITICAL Error during experience initialization:", error);
                 if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Initialization failed: ${error.message}. Please refresh.`);
                 setIsLoading(false);
-                setExperienceInitialized(false);
+                setExperienceInitialized(false); // Ensure state reflects failure
+                // Attempt cleanup
                 audioEngineRef.current?.dispose();
                 visualCanvasRef.current?.dispose();
                 audioEngineRef.current = null;
@@ -1011,45 +1053,67 @@
                       window.showErrorScreen(`Initialization failed (${error.message}). Please refresh.`);
                  }
             }
-        }, [experienceInitialized, volume, currentMood]); // Dependencies
+        }, [experienceInitialized, volume, currentMood, isPlaying]); // Added isPlaying dependency
 
         // --- Effects to Update Instances ---
         React.useEffect(() => { // Update AudioEngine & Connector
-            if (!experienceInitialized || !audioEngineRef.current) return;
+            if (!experienceInitialized || !audioEngineRef.current) return; // Guard clause
+
+            // --- IMPORTANT: Call engine.setPlaying() here based on App's isPlaying state ---
+            console.log(`App Effect: Syncing AudioEngine play state to: ${isPlaying}`);
             try {
-                audioEngineRef.current.setPlaying(isPlaying, currentMood);
-                if (audioEngineRef.current.volume !== volume) {
-                    audioEngineRef.current.setVolume(volume);
-                }
-                // Trigger Look Around Hint
-                if (isPlaying && !hintShownRef.current) {
-                    setShowLookAroundHint(true);
-                    hintShownRef.current = true; // Mark as shown
-                }
-            } catch(e) { console.error("App: Error updating AudioEngine state:", e); }
+                // Pass currentMood to setPlaying if the mood has changed since last sync
+                const moodToSet = audioEngineRef.current.currentMood !== currentMood ? currentMood : undefined;
+                audioEngineRef.current.setPlaying(isPlaying, moodToSet);
+            } catch (e) {
+                console.error("App: Error calling AudioEngine.setPlaying:", e);
+            }
+
+            // Update volume if changed
+            if (audioEngineRef.current.volume !== volume) {
+                 try { audioEngineRef.current.setVolume(volume); } catch(e) { console.error("App: Error setting AudioEngine volume:", e); }
+            }
+
+            // Update connector mood (safe to call repeatedly)
             if (audioConnectorRef.current) {
                  try { audioConnectorRef.current.setMood(currentMood); } catch(e) { console.error("App: Error updating Connector mood:", e); }
             }
+
+            // Trigger Look Around Hint only once when playing starts after initialization
+            if (isPlaying && !hintShownRef.current) {
+                console.log("App Effect: Showing Look Around Hint.");
+                setShowLookAroundHint(true);
+                hintShownRef.current = true; // Mark as shown for this session
+            }
+
         }, [isPlaying, currentMood, volume, experienceInitialized]); // Dependencies
 
         React.useEffect(() => { // Update VisualCanvas
-             if (!experienceInitialized || !visualCanvasRef.current) return;
+             if (!experienceInitialized || !visualCanvasRef.current) return; // Guard clause
+
+             console.log(`App Effect: Updating VisualCanvas mood: ${currentMood}, animate: ${isPlaying}`);
              try {
+                 // Change mood if necessary
                  if (visualCanvasRef.current.currentMood !== currentMood) {
                      visualCanvasRef.current.changeMood(currentMood);
                  }
+                 // Update animation state
                  visualCanvasRef.current.animate(isPlaying);
              } catch(e) { console.error("App: Error updating VisualCanvas state:", e); }
         }, [isPlaying, currentMood, experienceInitialized]); // Dependencies
 
         // --- Event Handlers ---
+        // handleEnterExperience now only hides onboarding and calls initializeExperience
         const handleEnterExperience = () => {
+            // Ensure HTML disclaimer is hidden immediately
             const htmlDisclaimer = document.getElementById('disclaimer-banner');
             if (htmlDisclaimer && !htmlDisclaimer.classList.contains('hidden')) {
                  htmlDisclaimer.classList.add('hidden');
                  document.documentElement.style.setProperty('--disclaimer-height', '0px');
             }
             setShowOnboarding(false);
+            setIsLoading(true); // Show loading briefly while initializing
+            // Use timeout to allow loading screen to render before heavy init
             setTimeout(initializeExperience, 50);
         };
 
@@ -1060,21 +1124,28 @@
                   return;
              }
              const nextIsPlaying = !isPlaying;
+             // Handle context resume explicitly when user clicks Play
+             // This ensures the context is running *before* we tell the engine to play
              if (nextIsPlaying && audioEngineRef.current.audioContext?.state === 'suspended') {
                  console.log("App: Attempting to resume AudioContext on play toggle...");
                  audioEngineRef.current.audioContext.resume()
                     .then(() => {
                          console.log("App: AudioContext resumed by toggle.");
+                         // NOW set the state to playing. The useEffect hook will handle calling engine.setPlaying
                          setIsPlaying(true);
+                         if (typeof ToastSystem !== 'undefined') ToastSystem.notify('success', 'Audio activated!');
                     })
                     .catch(e => {
                          console.error("App: Error resuming audio context on toggle:", e);
                          if(typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Audio failed to start. Click/Tap again.');
+                         // Keep state as paused if resume failed
+                         setIsPlaying(false);
                     });
              } else {
+                 // If context is running or we are pausing, just toggle the state
                  setIsPlaying(nextIsPlaying);
              }
-        }, [experienceInitialized, isPlaying]);
+        }, [experienceInitialized, isPlaying]); // Dependencies for useCallback
 
         const handleVolumeChange = (e) => {
             if (!experienceInitialized) return;
@@ -1085,6 +1156,7 @@
             if (!experienceInitialized || isExporting) return;
             const newMood = e.target.value;
             if (newMood !== currentMood) {
+                 // Update App state. The useEffect hook will handle passing this to engine/visuals.
                  setCurrentMood(newMood);
                  if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', `Mood changed to ${newMood.charAt(0).toUpperCase() + newMood.slice(1)}`);
             }
@@ -1109,6 +1181,7 @@
         // --- Keyboard Shortcuts ---
         React.useEffect(() => {
           const handleKeyPress = (e) => {
+            // Ignore shortcuts if onboarding, exporting, or focus is on input/select
             if (showOnboarding || !experienceInitialized || showExportPanel || isExporting ||
                 document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'SELECT' ||
                 e.ctrlKey || e.altKey || e.metaKey) {
@@ -1117,8 +1190,9 @@
 
             const moodIndex = parseInt(e.key) - 1;
             if (!isNaN(moodIndex) && moodIndex >= 0 && moodIndex < availableMoods.length) {
-                if (currentMood !== availableMoods[moodIndex].id) {
-                    setCurrentMood(availableMoods[moodIndex].id);
+                const targetMood = availableMoods[moodIndex].id;
+                if (currentMood !== targetMood) {
+                    setCurrentMood(targetMood); // Update state
                     if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', `Mood changed to ${availableMoods[moodIndex].label}`);
                 }
                 return;
@@ -1133,36 +1207,43 @@
             }
           };
 
+          // Add listener only when experience is ready and onboarding is hidden
           if (experienceInitialized && !showOnboarding) {
               window.addEventListener('keydown', handleKeyPress);
           }
+          // Cleanup listener
           return () => window.removeEventListener('keydown', handleKeyPress);
-        }, [showOnboarding, experienceInitialized, showExportPanel, isExporting, togglePlayback, currentMood, availableMoods, toggleExportPanel, toggleUIVisibility, volume]);
+        }, [showOnboarding, experienceInitialized, showExportPanel, isExporting, togglePlayback, currentMood, availableMoods, toggleExportPanel, toggleUIVisibility, volume]); // Re-bind if these change
 
         // --- Mouse Move for UI Visibility ---
         React.useEffect(() => {
           const handleInteraction = () => {
             if (uiVisibilityTimeoutRef.current) clearTimeout(uiVisibilityTimeoutRef.current);
             if (!uiVisible) setUiVisible(true);
+            // Only set timeout to hide if the export panel isn't open
             if (!showExportPanel) {
                  uiVisibilityTimeoutRef.current = setTimeout(() => {
+                      // Double check export panel status again before hiding
                       if (!showExportPanel) setUiVisible(false);
-                 }, 3000);
+                 }, 3000); // 3 seconds inactivity
             }
           };
+          // Add listeners only when experience is ready and onboarding is hidden
           if (experienceInitialized && !showOnboarding) {
             window.addEventListener('mousemove', handleInteraction);
             window.addEventListener('touchstart', handleInteraction, {passive: true});
+            // Trigger initial timer if UI is meant to be visible and panel is closed
             if (uiVisible && !showExportPanel) handleInteraction();
           }
+          // Cleanup listeners and timeout
           return () => {
             window.removeEventListener('mousemove', handleInteraction);
             window.removeEventListener('touchstart', handleInteraction);
             if (uiVisibilityTimeoutRef.current) clearTimeout(uiVisibilityTimeoutRef.current);
           };
-        }, [uiVisible, showOnboarding, showExportPanel, experienceInitialized]);
+        }, [uiVisible, showOnboarding, showExportPanel, experienceInitialized]); // Re-bind if these change
 
-        // --- Export Logic ---
+        // --- Export Logic --- (Keep existing export logic functions: handleExport*, startExport, finishExport)
         const handleExportQualityChange = (quality) => setExportQuality(quality);
         const handleExportFormatChange = (format) => setExportFormat(format);
         const handleExportDurationChange = (e) => {
@@ -1188,15 +1269,19 @@
             console.log(`App: Starting export - Duration: ${exportDuration}s, Quality: ${exportQuality}, Format: ${exportFormat}`);
 
             try {
+                // --- Ensure Audio is Running for Recording ---
                 let audioStarted = false;
                 if (!isPlaying || audioEngineRef.current?.audioContext?.state !== 'running') {
-                    setIsPlaying(true);
                     if (audioEngineRef.current?.audioContext?.state === 'suspended') {
                          await audioEngineRef.current.audioContext.resume();
                          audioStarted = true;
                     }
+                    // Set playing state AFTER ensuring context is running
+                    setIsPlaying(true);
+                    // Wait briefly for audio to stabilize if it was just started/resumed
                     await new Promise(resolve => setTimeout(resolve, audioStarted ? 500 : 100));
                 }
+                // Final check if audio context is running
                 if (audioEngineRef.current?.audioContext?.state !== 'running') {
                      throw new Error("Audio context failed to start for recording.");
                 }
@@ -1210,12 +1295,13 @@
                 if (exportTimerRef.current) clearInterval(exportTimerRef.current);
 
                 exportTimerRef.current = setInterval(() => {
-                    if (!audioEngineRef.current || !isExporting) { // Check isExporting flag too
+                    // Check if export should be cancelled
+                    if (!isExporting || !audioEngineRef.current) {
                          clearInterval(exportTimerRef.current);
                          exportTimerRef.current = null;
                          console.log("App: Export cancelled or component unmounted during recording.");
                          if (videoExporterRef.current && videoExporterRef.current.mediaRecorder && videoExporterRef.current.mediaRecorder.state !== 'inactive') {
-                              videoExporterRef.current.mediaRecorder.stop();
+                              videoExporterRef.current.mediaRecorder.stop(); // Attempt to stop cleanly
                          }
                          setIsExporting(false);
                          setExportProgress(0);
@@ -1229,7 +1315,7 @@
                         clearInterval(exportTimerRef.current);
                         exportTimerRef.current = null;
                         console.log("App: Recording timer finished, stopping recorder...");
-                        finishExport();
+                        finishExport(); // Call finishExport when timer completes
                     }
                 }, updateInterval);
 
@@ -1253,8 +1339,10 @@
                 if (!blob || blob.size === 0) throw new Error("Recording resulted in an empty file.");
 
                 if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', 'Finalizing format...');
+                // Pass progress callback to convertToFormat
                 const finalBlob = await videoExporterRef.current.convertToFormat(blob, exportFormat, (p) => setExportProgress(99 + p * 0.01));
-                let finalExtension = 'webm';
+
+                let finalExtension = 'webm'; // Default
                 if (finalBlob.type.includes('mp4')) finalExtension = 'mp4';
                 else if (finalBlob.type.includes('gif')) finalExtension = 'gif';
 
@@ -1262,10 +1350,11 @@
                 const filename = `harmonic-visions-${currentMood}-${timestamp}.${finalExtension}`;
                 const link = videoExporterRef.current.createDownloadLink(finalBlob, filename);
                 document.body.appendChild(link); link.click(); document.body.removeChild(link);
-                URL.revokeObjectURL(link.href);
+                URL.revokeObjectURL(link.href); // Clean up object URL
 
                 setExportProgress(100);
                 if (typeof ToastSystem !== 'undefined') ToastSystem.notify('success', `Video saved as ${filename}!`);
+                // Delay resetting state to show 100% briefly
                 setTimeout(() => { setIsExporting(false); setExportProgress(0); setShowExportPanel(false); }, 2000);
 
             } catch (error) {
@@ -1275,7 +1364,7 @@
             }
         };
 
-        // --- Enhanced Export Panel Component ---
+        // --- Enhanced Export Panel Component --- (Keep existing structure/logic)
          const EnhancedExportPanel = () => {
             const calculateEstimatedTime = () => `~${Math.ceil(exportDuration / 60 * 5)}m`; // Very rough estimate
             const formatDuration = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
@@ -1354,6 +1443,7 @@
                    <div className="creator-badge"> FatStinkyPanda's Transcendence Experience <span className="support-text">Thanks for your support!</span> </div>
                  </header>
 
+                 {/* Canvas for VisualCanvas */}
                  <canvas ref={canvasRef} className="visual-canvas" aria-label="Harmonic Visions Visual Experience" />
 
                  {/* Render Look Around Hint */}
