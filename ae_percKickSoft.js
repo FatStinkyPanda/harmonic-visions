@@ -1,7 +1,7 @@
 // ae_percKickSoft.js - Audio Module for Soft Kick Drum Percussion
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.1 (Fixed InvalidStateError on osc.stop)
+// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
 
 /**
  * @class AEPercKickSoft
@@ -414,24 +414,24 @@ class AEPercKickSoft {
         }
 
         const velocity = this.currentPattern[this.currentPatternIndex];
-        const noteStartTime = this.nextKickTime; // Use the pre-calculated start time
+        const noteStartTime = this.nextKickTime; // Use the pre-calculated grid start time
 
         // Apply timing humanization
         let timingOffset = 0;
         if (this.settings.humanizeTiming && this.settings.humanizeTiming > 0) {
              timingOffset = (Math.random() - 0.5) * 2.0 * this.settings.humanizeTiming;
         }
-        const actualKickPlayTime = noteStartTime + timingOffset;
+        const intendedPlayTime = noteStartTime + timingOffset; // Humanized intended start time
 
         // Trigger a kick sound if velocity > 0 (0 indicates a rest)
         if (typeof velocity === 'number' && velocity > 0) {
             // console.debug(`${this.MODULE_ID}: Triggering kick at ${actualKickPlayTime.toFixed(3)}s with velocity ${velocity.toFixed(2)}`);
-            this._createSingleKick(actualKickPlayTime, velocity);
+            this._createSingleKick(intendedPlayTime, velocity); // Pass intended time
         } else {
             // console.debug(`${this.MODULE_ID}: Rest at step ${this.currentPatternIndex}`);
         }
 
-        // Calculate the start time for the *next* beat/step
+        // Calculate the start time for the *next* beat/step based on the *un-humanized* grid time
         this.nextKickTime = noteStartTime + this.beatDuration;
 
         // Move to the next step in the pattern
@@ -446,15 +446,20 @@ class AEPercKickSoft {
     }
 
 
-    /** Creates and plays a single synthesized soft kick drum sound. */
+    /** Creates and plays a single synthesized soft kick drum sound using lookahead timing. */
     _createSingleKick(playTime, velocity) {
-        // Determine the connection point based on whether the filter is used
+        // --- Calculate Effective Play Time ---
+        const now = this.audioContext.currentTime;
+        const lookahead = 0.05; // 50ms lookahead
+        const effectivePlayTime = now + lookahead;
         const connectionPoint = this.filterNode || this.moduleOutputGain;
 
-        if (!this.audioContext || !connectionPoint || playTime < this.audioContext.currentTime) {
-             console.warn(`${this.MODULE_ID}: Skipping kick creation - invalid time or missing nodes.`);
-             return;
+        // --- Add Robust Node Checks ---
+        if (!this.audioContext || !connectionPoint) {
+            console.warn(`${this.MODULE_ID}: Skipping kick creation - missing essential nodes (context or connectionPoint).`);
+            return;
         }
+        // --- End Node Checks ---
 
         let osc = null;
         let envGain = null;
@@ -466,43 +471,45 @@ class AEPercKickSoft {
             osc.type = 'sine'; // Sine is best for soft fundamental
 
             envGain = this.audioContext.createGain(); // Controls the ADSR-like envelope
-            envGain.gain.setValueAtTime(0.0001, playTime); // Start silent
+            envGain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
 
             // Connect nodes: Osc -> EnvGain -> FilterNode (or ModuleOutputGain)
             osc.connect(envGain);
             envGain.connect(connectionPoint);
 
-            // --- Start the oscillator PRECISELY at playTime ---
-            // Moved this *before* scheduling stop and envelopes
-            osc.start(playTime);
-            // --- End Move ---
+            // --- Start the oscillator PRECISELY at effectivePlayTime ---
+            osc.start(effectivePlayTime);
 
             // --- Calculate Randomized Parameters ---
             const freqStart = this.settings.startFrequencyBase + (Math.random() - 0.5) * 2.0 * this.settings.startFrequencyRange;
             const freqEnd = this.settings.endFrequencyBase + (Math.random() - 0.5) * 2.0 * this.settings.endFrequencyRange;
-            const pitchDropTime = this.settings.pitchDropTimeBase + (Math.random() - 0.5) * 2.0 * this.settings.pitchDropTimeRange;
-            const decayTime = this.settings.decayTimeBase + (Math.random() - 0.5) * 2.0 * this.settings.decayTimeRange;
+            const pitchDropTime = Math.max(0.005, this.settings.pitchDropTimeBase + (Math.random() - 0.5) * 2.0 * this.settings.pitchDropTimeRange); // Ensure > 0
+            const decayTime = Math.max(0.01, this.settings.decayTimeBase + (Math.random() - 0.5) * 2.0 * this.settings.decayTimeRange); // Ensure > 0
             const randomVelocityMod = 1.0 + (Math.random() - 0.5) * 2.0 * this.settings.velocityRange;
             const finalVelocity = Math.max(0.01, Math.min(1.0, velocity * randomVelocityMod)); // Apply pattern velocity and random mod
 
             // --- Apply Pitch Envelope ---
             const freqParam = osc.frequency;
-            freqParam.setValueAtTime(freqStart, playTime);
-            freqParam.exponentialRampToValueAtTime(Math.max(20, freqEnd), playTime + pitchDropTime); // Ensure end freq > 0
+            // Set initial frequency slightly before to ensure it's ready
+            freqParam.setValueAtTime(freqStart, Math.max(now, effectivePlayTime - 0.001));
+            freqParam.exponentialRampToValueAtTime(Math.max(20, freqEnd), effectivePlayTime + pitchDropTime);
 
             // --- Apply Volume Envelope (Fast Attack, Quick Exponential Decay) ---
             const attack = this.settings.attackTime || 0.002;
             const gainParam = envGain.gain;
-            gainParam.linearRampToValueAtTime(finalVelocity, playTime + attack); // Quick rise to peak velocity
+            gainParam.linearRampToValueAtTime(finalVelocity, effectivePlayTime + attack); // Quick rise to peak velocity
             // Exponential decay starting immediately after attack peak
-            const decayStartTime = playTime + attack;
+            const decayStartTime = effectivePlayTime + attack;
             // Use time constant based on randomized decay time
             gainParam.setTargetAtTime(0.0001, decayStartTime, decayTime / 3.0);
 
             // --- Schedule Node Stop ---
             // Stop time is after the decay phase completes significantly
             const stopTime = decayStartTime + decayTime + 0.1; // Add buffer
-            osc.stop(stopTime); // Now safe to schedule stop
+             try {
+                 osc.stop(stopTime); // Schedule stop
+             } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error scheduling oscillator stop for kick ${kickId}:`, e); }
+
 
             // --- Schedule Cleanup ---
             const cleanupDelay = (stopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
@@ -512,8 +519,6 @@ class AEPercKickSoft {
 
             // --- Store Active Kick ---
             this.activeKicks.set(kickId, { osc, envGain, cleanupTimeoutId, isStopping: false });
-
-            // --- MOVED: osc.start(playTime); --- was here
 
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error creating kick ${kickId}:`, error);

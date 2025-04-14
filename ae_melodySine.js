@@ -1,7 +1,7 @@
 // ae_melodySine.js - Audio Module for Simple Sine Wave Melodies
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.1.1 (Fixed InvalidStateError on osc.stop)
+// Version: 1.1.2 (Fixed timing issues with lookahead scheduling)
 
 /**
  * @class AEMelodySine
@@ -183,7 +183,7 @@ class AEMelodySine {
         }
          // Handle suspended context
          if (this.audioContext.state === 'suspended') {
-             console.warn(`${this.MODULE_ID}: AudioContext suspended. Attempting resume. Playback may be delayed.`);
+             console.warn(`${this.MODULE_ID}: AudioContext is suspended. Attempting resume. Playback may be delayed.`);
              this.audioContext.resume().catch(err => console.error(`${this.MODULE_ID}: Error resuming context on play:`, err));
              // We'll proceed, but sound won't start until context resumes.
              // The `nextNoteStartTime` will be based on the time when play *was called*.
@@ -488,17 +488,20 @@ class AEMelodySine {
         if (this.settings.humanizeTiming && this.settings.humanizeTiming > 0) {
              timingOffset = (Math.random() - 0.5) * 2.0 * this.settings.humanizeTiming;
         }
-        const actualNoteStartTime = noteStartTime + timingOffset;
+        // Intended start time for calculating release, potentially humanized
+        const intendedPlayTime = noteStartTime + timingOffset;
 
 
         if (!isRest) {
             // Play the note using precise Web Audio scheduling
-            this._createNote(patternItem, actualNoteStartTime, noteDurationSeconds);
+            // Pass the *intended* play time for release calculation, but the function
+            // will use lookahead for actual audio event scheduling.
+            this._createNote(patternItem, intendedPlayTime, noteDurationSeconds);
         } else {
              // console.debug(`${this.MODULE_ID}: Rest for ${noteDurationSeconds.toFixed(2)}s starting at ${noteStartTime.toFixed(3)}`);
         }
 
-        // Calculate the start time for the *following* note/rest
+        // Calculate the start time for the *following* note/rest based on the *un-humanized* grid time
         this.nextNoteStartTime = noteStartTime + noteDurationSeconds;
 
         // Move to the next step in the pattern
@@ -519,18 +522,24 @@ class AEMelodySine {
 
 
     /**
-     * Creates and plays a single sine wave note with envelope and effects.
+     * Creates and plays a single sine wave note with envelope and effects using lookahead timing.
      * @param {object} noteInfo - Object containing note details { scaleIndex, velocity?, octave? }
-     * @param {number} playTime - The precise AudioContext time the note attack should start.
+     * @param {number} playTime - The *intended* precise AudioContext time the note attack should start.
      * @param {number} durationSeconds - The rhythmic duration of the note (before release).
      * @private
      */
     _createNote(noteInfo, playTime, durationSeconds) {
-        if (!this.audioContext || !this.moduleOutputGain || playTime < this.audioContext.currentTime) {
-             // Avoid scheduling in the past or if essential nodes are missing
-             console.warn(`${this.MODULE_ID}: Skipping note creation - invalid time or missing nodes.`);
-             return;
+        // --- Calculate Effective Play Time using Lookahead ---
+        const now = this.audioContext.currentTime;
+        const lookahead = 0.05; // 50ms lookahead
+        const effectivePlayTime = now + lookahead;
+
+        // --- Add Robust Node Checks ---
+        if (!this.audioContext || !this.moduleOutputGain || !this.vibratoGain) {
+            console.warn(`${this.MODULE_ID}: Skipping note creation - missing essential nodes (context, outputGain, or vibratoGain).`);
+            return;
         }
+        // --- End Node Checks ---
 
         let osc = null;
         let gain = null;
@@ -546,10 +555,11 @@ class AEMelodySine {
             // --- Create Nodes ---
             osc = this.audioContext.createOscillator();
             osc.type = 'sine';
-            osc.frequency.setValueAtTime(frequency, playTime); // Set frequency precisely at playTime
+            // Set frequency slightly before effectivePlayTime to ensure it's ready
+            osc.frequency.setValueAtTime(frequency, Math.max(now, effectivePlayTime - 0.001));
 
             gain = this.audioContext.createGain();
-            gain.gain.setValueAtTime(0.0001, playTime); // Start silent
+            gain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
 
             // Connect nodes: Osc -> Gain -> Module Output Gain
             osc.connect(gain);
@@ -564,10 +574,8 @@ class AEMelodySine {
                 }
             }
 
-            // --- Start the oscillator PRECISELY at playTime ---
-            // Moved this *before* scheduling stop and envelopes
-            osc.start(playTime);
-            // --- End Move ---
+            // --- Start the oscillator PRECISELY at effectivePlayTime ---
+            osc.start(effectivePlayTime);
 
             // --- Apply Envelope (ADSR-like) ---
             const baseVelocity = this.settings.noteVelocityBase || 0.7;
@@ -582,45 +590,46 @@ class AEMelodySine {
             const gainParam = gain.gain;
 
             // Attack Phase
-            gainParam.linearRampToValueAtTime(velocity, playTime + attack);
+            gainParam.linearRampToValueAtTime(velocity, effectivePlayTime + attack);
 
             // Decay Phase (to sustain level)
-            gainParam.setTargetAtTime(velocity * sustain, playTime + attack, decay / 3.0); // Decay time constant
+            gainParam.setTargetAtTime(velocity * sustain, effectivePlayTime + attack, decay / 3.0);
 
-            // Release Phase (starts at the end of the note's rhythmic duration)
-            const releaseStartTime = playTime + durationSeconds;
+            // Release Phase (starts at the end of the note's rhythmic duration *relative to the INTENDED start time*)
+            const intendedReleaseStartTime = playTime + durationSeconds;
+            // Schedule the release relative to the effective start time, ensuring it doesn't happen before the decay phase ends
+            const releaseStartTime = Math.max(effectivePlayTime + attack + decay, intendedReleaseStartTime);
             gainParam.setTargetAtTime(0.0001, releaseStartTime, release / 3.0); // Release time constant
 
             // --- Schedule Oscillator Stop ---
-            // Stop time is after the note duration AND the release phase
+            // Stop time is after the note duration AND the release phase (relative to effective start)
             const stopTime = releaseStartTime + release + 0.1; // Add buffer
             if (osc.stop) {
-                osc.stop(stopTime); // Now safe to schedule stop
+                try {
+                    osc.stop(stopTime); // Schedule stop
+                } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error scheduling oscillator stop for note ${noteId}:`, e); }
             } else {
                  console.warn(`${this.MODULE_ID}: Oscillator node missing stop method? Note ${noteId}`);
             }
 
             // --- Schedule Cleanup ---
-            const cleanupDelay = (stopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
-            const cleanupTimeoutId = setTimeout(() => {
-                this._cleanupNote(noteId);
-            }, Math.max(50, cleanupDelay)); // Ensure minimum delay
+             const cleanupDelay = (stopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
+             const cleanupTimeoutId = setTimeout(() => {
+                 this._cleanupNote(noteId);
+             }, Math.max(50, cleanupDelay)); // Ensure minimum delay
 
             // --- Store Active Note ---
             this.activeNotes.set(noteId, { osc, gain, cleanupTimeoutId, isStopping: false });
 
-            // --- MOVED: osc.start(playTime); --- was here
-
         } catch (error) {
-            console.error(`${this.MODULE_ID}: Error creating note ${noteId}:`, error);
-            // Attempt cleanup of partially created nodes
-            if (osc) try { osc.disconnect(); } catch(e) {}
-            if (gain) try { gain.disconnect(); } catch(e) {}
-            if (this.activeNotes.has(noteId)) {
-                 const noteData = this.activeNotes.get(noteId);
-                 if (noteData.cleanupTimeoutId) clearTimeout(noteData.cleanupTimeoutId);
-                 this.activeNotes.delete(noteId);
-            }
+             console.error(`${this.MODULE_ID}: Error creating note ${noteId}:`, error);
+             // Attempt cleanup of partially created nodes
+             this._cleanupPartialNote({ osc, gain }); // Call helper
+             if (this.activeNotes.has(noteId)) {
+                  const noteData = this.activeNotes.get(noteId);
+                  if (noteData.cleanupTimeoutId) clearTimeout(noteData.cleanupTimeoutId);
+                  this.activeNotes.delete(noteId);
+             }
         }
     }
 
@@ -644,7 +653,7 @@ class AEMelodySine {
              if (noteData.osc) try { noteData.osc.disconnect(); } catch (e) {}
              if (noteData.gain) try { noteData.gain.disconnect(); } catch (e) {}
         } catch (e) {
-             console.error(`${this.MODULE_ID}: Error disconnecting nodes for note ${noteId}:`, e);
+             console.warn(`${this.MODULE_ID}: Error disconnecting nodes for note ${noteId}:`, e);
         } finally {
              // Clear the cleanup timeout reference just in case
              if (noteData.cleanupTimeoutId) {
@@ -682,6 +691,22 @@ class AEMelodySine {
          } finally {
               this.activeNotes.delete(noteId);
          }
+     }
+
+     /**
+      * Cleans up partially created nodes if note creation fails mid-way.
+      * @param {object} nodes - Object containing potentially created nodes { osc, gain }
+      * @private
+      */
+     _cleanupPartialNote(nodes) {
+         console.warn(`${this.MODULE_ID}: Cleaning up partially created note nodes.`);
+         const { osc, gain } = nodes;
+         // Disconnect vibrato if it might have been connected
+         if (this.vibratoGain && osc && osc.detune) {
+             try { this.vibratoGain.disconnect(osc.detune); } catch(e) {}
+         }
+         if (gain) try { gain.disconnect(); } catch(e){}
+         if (osc) try { osc.disconnect(); } catch(e){}
      }
 
 

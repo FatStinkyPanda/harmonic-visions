@@ -1,7 +1,7 @@
 // ae_ambientInsectsNight.js - Audio Module for Night Insect Ambience
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.1 (Fixed InvalidStateError on osc.stop)
+// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
 
 /**
  * @class AEAmbientInsectsNight
@@ -46,8 +46,8 @@ class AEAmbientInsectsNight {
             chirpWaveform: 'sine',    // 'sine' or 'triangle' usually work well
             chirpFrequencyMin: 2800,  // Base frequency minimum (Hz)
             chirpFrequencyMax: 4800,  // Base frequency maximum (Hz)
-            chirpDurationMin: 0.03,   // Minimum length of the chirp tone (s)
-            chirpDurationMax: 0.09,   // Maximum length of the chirp tone (s)
+            chirpDurationMin: 0.03,   // Minimum length of the chirp tone (s) - Less critical now envelope defines sound length
+            chirpDurationMax: 0.09,   // Maximum length of the chirp tone (s) - Less critical now envelope defines sound length
             chirpAttackTime: 0.005,   // Very fast attack (s)
             chirpReleaseTime: 0.04,   // Quick but slightly resonant release (s)
             chirpVolumeMin: 0.6,      // Minimum relative volume (0-1)
@@ -117,10 +117,6 @@ class AEAmbientInsectsNight {
         // Potential subtle drift:
         // Could slightly modulate the base densityFactor or pitchFactor over long periods
         // based on 'time' or 'dreaminess' from visualParams for extra variation.
-        // Example:
-        // const baseDensity = this.settings.densityFactor || 1.0;
-        // const drift = Math.sin(time * 0.01 + this.chirpIdCounter * 0.1) * 0.1; // Very slow drift
-        // this.currentDensityFactor = baseDensity + drift; // Store internally for use in scheduling
     }
 
     /** Start the insect chirp sequence. */
@@ -338,8 +334,11 @@ class AEAmbientInsectsNight {
         this.sequenceTimeoutId = setTimeout(() => {
             if (!this.isPlaying) return; // Check state again inside timeout
             try {
-                this.nextChirpTime = this.audioContext.currentTime; // Update time for this cluster start
-                this._triggerChirpCluster();
+                // Get the *intended* start time for this cluster
+                const intendedClusterStartTime = scheduledTime;
+                // Update nextChirpTime for the *next* scheduling cycle based on when this one *should* have started
+                this.nextChirpTime = intendedClusterStartTime;
+                this._triggerChirpCluster(intendedClusterStartTime); // Pass intended time
             } catch (e) {
                 console.error(`${this.MODULE_ID}: Error in _triggerChirpCluster:`, e);
                 this.stop(this.audioContext.currentTime); // Stop sequence on error
@@ -348,14 +347,14 @@ class AEAmbientInsectsNight {
     }
 
     /** Triggers a cluster of 1 or more chirps with slight timing variations. */
-    _triggerChirpCluster() {
+    _triggerChirpCluster(clusterStartTime) { // Accept intended start time
         if (!this.isPlaying || !this.audioContext) return;
 
         const clusterMin = this.settings.chirpsPerClusterMin || 1;
         const clusterMax = this.settings.chirpsPerClusterMax || 4;
         const numChirps = Math.floor(clusterMin + Math.random() * (clusterMax - clusterMin + 1));
         const clusterSpread = this.settings.clusterSpread || 0.06;
-        const clusterStartTime = this.nextChirpTime; // Use the updated time
+        // clusterStartTime is the intended start time for the cluster
 
         // console.debug(`${this.MODULE_ID}: Triggering cluster of ${numChirps} chirps around ${clusterStartTime.toFixed(3)}s`);
 
@@ -366,9 +365,10 @@ class AEAmbientInsectsNight {
             const pitchFactor = this.settings.pitchFactor || 1.0;
             const frequency = (freqMin + Math.random() * (freqMax - freqMin)) * pitchFactor;
 
-            const durationMin = this.settings.chirpDurationMin || 0.03;
-            const durationMax = this.settings.chirpDurationMax || 0.09;
-            const duration = durationMin + Math.random() * (durationMax - durationMin);
+            // Note: chirpDuration is less relevant now, envelope defines sound length
+            // const durationMin = this.settings.chirpDurationMin || 0.03;
+            // const durationMax = this.settings.chirpDurationMax || 0.09;
+            // const duration = durationMin + Math.random() * (durationMax - durationMin);
 
             const volMin = this.settings.chirpVolumeMin || 0.6;
             const volMax = this.settings.chirpVolumeMax || 1.0;
@@ -376,24 +376,33 @@ class AEAmbientInsectsNight {
 
             const pan = (Math.random() - 0.5) * 2.0 * (this.settings.panSpread || 0.7);
 
-            // Calculate slightly offset start time within the cluster spread
-            const chirpStartTime = clusterStartTime + Math.random() * clusterSpread;
+            // Calculate slightly offset intended start time within the cluster spread
+            const intendedChirpStartTime = clusterStartTime + Math.random() * clusterSpread;
 
-            const chirpParams = { frequency, duration, volume, pan };
-            this._createSingleChirp(chirpParams, chirpStartTime);
+            // Pass duration for potential future use, but envelope controls perceived length
+            const chirpParams = { frequency, /*duration,*/ volume, pan };
+            // Pass the *intended* start time for this chirp
+            this._createSingleChirp(chirpParams, intendedChirpStartTime);
         }
 
-        // Schedule the *next* cluster check after this one is done
+        // Schedule the *next* cluster check based on the updated nextChirpTime
         this._scheduleNextChirp();
     }
 
 
-    /** Creates and plays a single synthesized insect chirp. */
-    _createSingleChirp(params, playTime) {
-        if (!this.audioContext || !this.outputGain || playTime < this.audioContext.currentTime) {
-             console.warn(`${this.MODULE_ID}: Skipping chirp creation - invalid time or missing nodes.`);
+    /** Creates and plays a single synthesized insect chirp using lookahead timing. */
+    _createSingleChirp(params, playTime) { // playTime is the *intended* start time
+        // --- Calculate Effective Play Time using Lookahead ---
+        const now = this.audioContext.currentTime;
+        const lookahead = 0.05; // 50ms lookahead
+        const effectivePlayTime = now + lookahead;
+
+        // --- Add Robust Node Checks ---
+        if (!this.audioContext || !this.outputGain) {
+             console.warn(`${this.MODULE_ID}: Skipping chirp creation - missing essential nodes (context or outputGain).`);
              return;
         }
+        // --- End Node Checks ---
 
         let osc = null;
         let gain = null;
@@ -404,25 +413,22 @@ class AEAmbientInsectsNight {
             // --- Create Nodes ---
             osc = this.audioContext.createOscillator();
             osc.type = this.settings.chirpWaveform || 'sine';
-            // Set frequency precisely at playTime
-            osc.frequency.setValueAtTime(params.frequency, playTime);
+            // Set frequency slightly before effectivePlayTime
+            osc.frequency.setValueAtTime(params.frequency, Math.max(now, effectivePlayTime - 0.001));
 
             gain = this.audioContext.createGain();
-            gain.gain.setValueAtTime(0.0001, playTime); // Start silent
+            gain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
 
             panner = this.audioContext.createStereoPanner();
-            // Set pan precisely at playTime (or slightly before if needed)
-            panner.pan.setValueAtTime(params.pan, playTime);
+            panner.pan.setValueAtTime(params.pan, effectivePlayTime); // Schedule pan at effective time
 
             // Connect nodes: Osc -> Gain -> Panner -> Module Output Gain
             osc.connect(gain);
             gain.connect(panner);
             panner.connect(this.outputGain);
 
-            // --- Start the oscillator PRECISELY at playTime ---
-            // Moved this *before* scheduling stop and envelopes
-            osc.start(playTime);
-            // --- End Move ---
+            // --- Start the oscillator PRECISELY at effectivePlayTime ---
+            osc.start(effectivePlayTime);
 
             // --- Apply Envelope (Fast ADSR-like for chirp) ---
             const attack = this.settings.chirpAttackTime || 0.005;
@@ -431,17 +437,20 @@ class AEAmbientInsectsNight {
             const gainParam = gain.gain;
 
             // Attack Phase (Linear ramp to peak)
-            gainParam.linearRampToValueAtTime(peakVolume, playTime + attack);
+            gainParam.linearRampToValueAtTime(peakVolume, effectivePlayTime + attack);
 
-            // Release Phase (Exponential decay starting slightly after attack)
-            // No sustain, so start release immediately after attack peak
-            const releaseStartTime = playTime + attack;
+            // Release Phase (Exponential decay starting slightly after attack peak)
+            const releaseStartTime = effectivePlayTime + attack;
             gainParam.setTargetAtTime(0.0001, releaseStartTime, release / 3.0); // Time constant for release
 
             // --- Schedule Node Stop ---
-            // Stop time is after the note's rhythmic duration AND the release phase completes
-            const stopTime = playTime + params.duration + release + 0.05; // Add buffer
-            osc.stop(stopTime); // Now safe to schedule stop
+            // Stop time is after the attack AND the release phase completes (relative to effective start)
+            // The original 'duration' parameter is less relevant now.
+            const stopTime = releaseStartTime + release + 0.05; // Add buffer after release finishes
+             try {
+                 osc.stop(stopTime); // Schedule stop
+             } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error scheduling oscillator stop for chirp ${chirpId}:`, e); }
+
 
             // --- Schedule Cleanup ---
             const cleanupDelay = (stopTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
@@ -452,15 +461,10 @@ class AEAmbientInsectsNight {
             // --- Store Active Chirp ---
             this.activeChirps.set(chirpId, { osc, gain, panner, cleanupTimeoutId, isStopping: false });
 
-            // --- MOVED: osc.start(playTime); --- was here
-
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error creating chirp ${chirpId}:`, error);
             // Attempt cleanup of partially created nodes
-            if (osc) try { osc.disconnect(); } catch(e) {}
-            if (gain) try { gain.disconnect(); } catch(e) {}
-            if (panner) try { panner.disconnect(); } catch(e) {}
-            // Remove from tracking if it was added
+             this._cleanupPartialChirp({ osc, gain, panner }); // Call helper
             if (this.activeChirps.has(chirpId)) {
                  const chirpData = this.activeChirps.get(chirpId);
                  if (chirpData.cleanupTimeoutId) clearTimeout(chirpData.cleanupTimeoutId);
@@ -485,13 +489,11 @@ class AEAmbientInsectsNight {
              if (chirpData.gain) chirpData.gain.disconnect();
              if (chirpData.osc) chirpData.osc.disconnect();
         } catch (e) {
-             console.error(`${this.MODULE_ID}: Error disconnecting nodes for chirp ${chirpId}:`, e);
+             console.warn(`${this.MODULE_ID}: Error disconnecting nodes for chirp ${chirpId}:`, e);
         } finally {
              // Clear the reference to the cleanup timeout itself from the object
              if (chirpData.cleanupTimeoutId) {
                  // The timeout function itself has already run, so no need to clearTimeout here.
-                 // Just nullify the reference on the potentially deleted object.
-                 // Note: This might be redundant if the object is deleted right after.
              }
              // Remove from the active chirps map
              this.activeChirps.delete(chirpId);
@@ -524,6 +526,15 @@ class AEAmbientInsectsNight {
          } finally {
               this.activeChirps.delete(chirpId); // Ensure removal from map
          }
+     }
+
+     /** Cleans up partially created nodes if chirp creation fails mid-way. */
+     _cleanupPartialChirp(nodes) {
+          console.warn(`${this.MODULE_ID}: Cleaning up partially created chirp nodes.`);
+          const { osc, gain, panner } = nodes;
+          if (panner) try { panner.disconnect(); } catch(e){}
+          if (gain) try { gain.disconnect(); } catch(e){}
+          if (osc) try { osc.disconnect(); } catch(e){}
      }
 
 } // End class AEAmbientInsectsNight

@@ -1,7 +1,7 @@
 // ae_instrumentPianoChord.js - Audio Module for Soft, Sustained Piano Chords
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.0 (Initial Robust Implementation)
+// Version: 1.0.1 (Fixed timing issues with lookahead scheduling)
 
 /**
  * @class AEInstrumentPianoChord
@@ -34,7 +34,7 @@ class AEInstrumentPianoChord {
         this.nextChordTime = 0;        // AudioContext time for the next chord's attack
 
         // --- Active Chord/Note Tracking ---
-        // Map<chordId, { notes: Map<noteId, { oscNodes: OscillatorNode[], envGain: GainNode }>, panner: StereoPannerNode, cleanupTimeoutId: number, isStopping: boolean }>
+        // Map<chordId, { notes: Map<noteId, { oscNodes: OscillatorNode[], envGain: GainNode }>, panner: StereoPannerNode, chordFilter: BiquadFilterNode, cleanupTimeoutId: number, isStopping: boolean }>
         this.activeChords = new Map();
         this.chordIdCounter = 0;
         this.noteIdCounter = 0; // Separate counter for notes within chords
@@ -98,7 +98,7 @@ class AEInstrumentPianoChord {
         console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
 
         try {
-            if (!audioContext || !masterOutputNode) throw new Error("AudioContext or masterOutputNode missing.");
+            if (!audioContext || !masterOutputNode) throw new Error("AudioContext or masterOutputNode is missing.");
             if (audioContext.state === 'closed') throw new Error("AudioContext is closed.");
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
@@ -150,12 +150,6 @@ class AEInstrumentPianoChord {
         if (!this.isEnabled || !this.isPlaying) return;
         // Could potentially add very subtle LFO modulation to the module filter cutoff or delay time
         // based on visualParams.dreaminess, but keep minimal for performance.
-        // Example:
-        // if (this.moduleFilter && visualParams?.dreaminess) {
-        //     const baseFreq = this.settings.filterCutoffBase || 1200;
-        //     const drift = Math.sin(time * 0.05 + this.chordIdCounter * 0.1) * 100 * visualParams.dreaminess;
-        //     this.moduleFilter.frequency.setTargetAtTime(baseFreq + drift, this.audioContext.currentTime, 0.5);
-        // }
     }
 
     /** Start the chord sequence scheduling. */
@@ -245,7 +239,7 @@ class AEInstrumentPianoChord {
                      if (chordData.cleanupTimeoutId) clearTimeout(chordData.cleanupTimeoutId);
                      const noteReleaseTime = this.settings.releaseTime || 1.8;
                      const cleanupTime = targetStopTime + noteReleaseTime + 0.2; // Time after release finishes
-                     const cleanupDelay = (cleanupTime - this.audioContext.currentTime + 0.1) * 1000;
+                     const cleanupDelay = (cleanupTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
                      chordData.cleanupTimeoutId = setTimeout(() => this._cleanupChord(chordId), Math.max(100, cleanupDelay));
                  }
             });
@@ -388,32 +382,41 @@ class AEInstrumentPianoChord {
         const itemDurationBeats = patternItem.duration || 1.0;
         const itemDurationSeconds = itemDurationBeats * this.beatDuration;
         const playChord = patternItem.play !== false; // Default to playing if 'play' is not explicitly false
-        const chordStartTime = this.nextChordTime;
+        const chordStartTime = this.nextChordTime; // Intended grid start time
         let timingOffset = (this.settings.humanizeTiming || 0) * (Math.random() - 0.5) * 2.0;
-        const actualPlayTime = chordStartTime + timingOffset;
+        const intendedPlayTime = chordStartTime + timingOffset; // Humanized intended start time
 
         if (playChord) {
             const baseVelocity = 1.0; // Base velocity before randomization
             const randomVelocityMod = 1.0 + (Math.random() - 0.5) * 2.0 * (this.settings.velocityRange || 0.25);
             const velocity = Math.max(0.1, Math.min(1.0, baseVelocity * randomVelocityMod));
-            this._createChord(actualPlayTime, velocity, itemDurationSeconds);
+             // Pass intended time, _createChord handles lookahead
+            this._createChord(intendedPlayTime, velocity, itemDurationSeconds);
         } else {
             // console.debug(`${this.MODULE_ID}: Rest for ${itemDurationSeconds.toFixed(2)}s`);
         }
 
-        this.nextChordTime = chordStartTime + itemDurationSeconds; // Calculate next start time
+        // Calculate next grid start time based on UN-humanized time
+        this.nextChordTime = chordStartTime + itemDurationSeconds;
         this.currentPatternIndex = (this.currentPatternIndex + 1) % this.currentChordPattern.length; // Loop pattern
         this._scheduleNextChord(); // Schedule the next step
     }
 
-    /** Creates and plays a single chord instance. */
+    /** Creates and plays a single chord instance using lookahead timing. */
     _createChord(playTime, velocity, durationSeconds) {
-        if (!this.audioContext || !this.moduleFilter || playTime < this.audioContext.currentTime) {
-             console.warn(`${this.MODULE_ID}: Skipping chord creation - invalid time or missing nodes.`);
-             return;
-        }
+        // --- Calculate Effective Play Time ---
+        const now = this.audioContext.currentTime;
+        const lookahead = 0.05; // 50ms lookahead
+        const effectivePlayTime = now + lookahead;
 
-        const frequencies = this._calculateChordFrequencies();
+        // --- Add Robust Node Checks ---
+        if (!this.audioContext || !this.moduleFilter) {
+            console.warn(`${this.MODULE_ID}: Skipping chord creation - missing essential nodes (context or moduleFilter).`);
+            return;
+        }
+        // --- End Node Checks ---
+
+        const frequencies = this._calculateChordFrequencies(); // Calculate frequencies early
         if (!frequencies || frequencies.length === 0) {
             console.warn(`${this.MODULE_ID}: No valid frequencies calculated for chord. Skipping.`);
             return;
@@ -428,23 +431,23 @@ class AEInstrumentPianoChord {
             // --- Create Panner for this Chord ---
             panner = this.audioContext.createStereoPanner();
             const panAmount = (Math.random() - 0.5) * 1.4; // Slightly wider pan range
-            panner.pan.setValueAtTime(panAmount, playTime);
+            panner.pan.setValueAtTime(panAmount, effectivePlayTime); // Schedule at effective time
 
             // --- Create Filter for this Chord (for filter envelope) ---
             chordFilter = this.audioContext.createBiquadFilter();
             chordFilter.type = 'lowpass';
             const filterCutoff = this.settings.filterCutoffBase + (Math.random() - 0.5) * 2.0 * this.settings.filterCutoffRange;
             const filterQ = this.settings.filterQBase + (Math.random() - 0.5) * 2.0 * this.settings.filterQRange;
-            chordFilter.frequency.setValueAtTime(filterCutoff, playTime);
-            chordFilter.Q.setValueAtTime(filterQ, playTime);
+            chordFilter.frequency.setValueAtTime(filterCutoff, effectivePlayTime); // Schedule at effective time
+            chordFilter.Q.setValueAtTime(filterQ, effectivePlayTime); // Schedule at effective time
 
             // Apply filter envelope
             const filterEnvAmount = this.settings.filterEnvAmount || 800;
             const filterEnvAttack = this.settings.filterEnvAttack || 0.02;
             const filterEnvDecay = this.settings.filterEnvDecay || 0.4;
             const filterSustainFreq = Math.max(50, filterCutoff - filterEnvAmount); // Target freq after decay
-            chordFilter.frequency.linearRampToValueAtTime(filterCutoff + filterEnvAmount, playTime + filterEnvAttack); // Quick rise
-            chordFilter.frequency.setTargetAtTime(filterSustainFreq, playTime + filterEnvAttack, filterEnvDecay / 3.0); // Decay
+            chordFilter.frequency.linearRampToValueAtTime(filterCutoff + filterEnvAmount, effectivePlayTime + filterEnvAttack); // Quick rise
+            chordFilter.frequency.setTargetAtTime(filterSustainFreq, effectivePlayTime + filterEnvAttack, filterEnvDecay / 3.0); // Decay
 
             // Connect filter to panner, panner to module filter
             chordFilter.connect(panner);
@@ -456,7 +459,7 @@ class AEInstrumentPianoChord {
                 const noteId = `note-${this.noteIdCounter++}`;
                 const oscNodes = [];
                 const envGain = this.audioContext.createGain();
-                envGain.gain.setValueAtTime(0.0001, playTime);
+                envGain.gain.setValueAtTime(0.0001, effectivePlayTime); // Start silent *at* effectivePlayTime
                 envGain.connect(chordFilter); // Connect note envelope to the chord's filter
 
                 // Create oscillator layers (fundamental + harmonics)
@@ -468,8 +471,8 @@ class AEInstrumentPianoChord {
                 // Fundamental
                 const fundOsc = this.audioContext.createOscillator();
                 fundOsc.type = oscType;
-                fundOsc.frequency.setValueAtTime(freq, playTime);
-                fundOsc.detune.setValueAtTime((Math.random() - 0.5) * detune, playTime); // Subtle random detune
+                fundOsc.frequency.setValueAtTime(freq, Math.max(now, effectivePlayTime - 0.001)); // Set slightly before
+                fundOsc.detune.setValueAtTime((Math.random() - 0.5) * detune, Math.max(now, effectivePlayTime - 0.001)); // Set slightly before
                 fundOsc.connect(envGain);
                 oscNodes.push(fundOsc);
 
@@ -477,10 +480,10 @@ class AEInstrumentPianoChord {
                 for(let h = 0; h < harmonicGains.length; h++) {
                     const harmonicOsc = this.audioContext.createOscillator();
                     harmonicOsc.type = harmonicOscType;
-                    harmonicOsc.frequency.setValueAtTime(freq * (h + 2), playTime); // h+2 for 2nd, 3rd, 4th harmonic etc.
-                    harmonicOsc.detune.setValueAtTime((Math.random() - 0.5) * detune * (h+1), playTime); // More detune on higher harmonics
+                    harmonicOsc.frequency.setValueAtTime(freq * (h + 2), Math.max(now, effectivePlayTime - 0.001)); // Set slightly before
+                    harmonicOsc.detune.setValueAtTime((Math.random() - 0.5) * detune * (h+1), Math.max(now, effectivePlayTime - 0.001)); // Set slightly before
                     const harmonicGainNode = this.audioContext.createGain();
-                    harmonicGainNode.gain.setValueAtTime(harmonicGains[h], playTime);
+                    harmonicGainNode.gain.setValueAtTime(harmonicGains[h], effectivePlayTime); // Set gain at effective time
                     harmonicOsc.connect(harmonicGainNode);
                     harmonicGainNode.connect(envGain);
                     oscNodes.push(harmonicOsc);
@@ -488,26 +491,33 @@ class AEInstrumentPianoChord {
 
                 // Apply ADSR Envelope to envGain
                 const { attackTime, decayTime, sustainLevel, releaseTime } = this.settings;
-                const peakGain = velocity; // Use randomized velocity
-                envGain.gain.linearRampToValueAtTime(peakGain, playTime + attackTime);
-                envGain.gain.setTargetAtTime(peakGain * sustainLevel, playTime + attackTime, decayTime / 3.0);
+                const peakGain = velocity; // Use randomized velocity passed to function
+                envGain.gain.linearRampToValueAtTime(peakGain, effectivePlayTime + attackTime);
+                envGain.gain.setTargetAtTime(peakGain * sustainLevel, effectivePlayTime + attackTime, decayTime / 3.0);
 
-                // Schedule release start (handled by stop() or implicitly at end of duration if needed)
-                const releaseStartTime = playTime + durationSeconds;
+                // Schedule release start (based on original intended time)
+                const intendedReleaseStartTime = playTime + durationSeconds;
+                // Ensure release starts after effective attack+decay
+                const releaseStartTime = Math.max(effectivePlayTime + attackTime + decayTime, intendedReleaseStartTime);
                 envGain.gain.setTargetAtTime(0.0001, releaseStartTime, releaseTime / 3.0);
 
                 // Schedule oscillator stops
                 const stopTime = releaseStartTime + releaseTime + 0.1; // Stop after release
-                oscNodes.forEach(osc => osc.start(playTime)); // Start all oscillators
-                oscNodes.forEach(osc => osc.stop(stopTime));  // Schedule stop
+                oscNodes.forEach(osc => osc.start(effectivePlayTime)); // Start all oscillators
+                oscNodes.forEach(osc => {
+                    try { osc.stop(stopTime); } catch (e) { if(e.name !== 'InvalidStateError') console.warn(`${this.MODULE_ID}: Error scheduling oscillator stop for note ${noteId}:`, e); }
+                });
 
                 activeNotesMap.set(noteId, { oscNodes, envGain });
             });
 
             // --- Schedule Chord Cleanup ---
             const chordReleaseTime = this.settings.releaseTime || 1.8;
-            const cleanupTime = playTime + durationSeconds + chordReleaseTime + 0.2; // After longest release
-            const cleanupDelay = (cleanupTime - this.audioContext.currentTime + 0.1) * 1000;
+            // Cleanup time needs to be relative to the *latest* possible stop time of any note in the chord
+            // Use the intended start time for duration calculation
+            const latestStopTime = (playTime + durationSeconds) + chordReleaseTime + 0.1;
+            const cleanupTime = latestStopTime + 0.2; // Add buffer after the latest possible stop
+            const cleanupDelay = (cleanupTime - this.audioContext.currentTime + 0.1) * 1000; // Delay from *now*
             const cleanupTimeoutId = setTimeout(() => this._cleanupChord(chordId), Math.max(50, cleanupDelay));
 
             // --- Store Active Chord ---
@@ -516,12 +526,7 @@ class AEInstrumentPianoChord {
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error creating chord ${chordId}:`, error);
             // Attempt cleanup of partially created chord nodes
-            if (panner) try { panner.disconnect(); } catch(e) {}
-            if (chordFilter) try { chordFilter.disconnect(); } catch(e) {}
-            activeNotesMap.forEach(noteData => {
-                if (noteData.envGain) try { noteData.envGain.disconnect(); } catch(e) {}
-                noteData.oscNodes.forEach(osc => { if (osc) try { osc.disconnect(); } catch(e) {} });
-            });
+             this._cleanupPartialChord({ panner, chordFilter, activeNotesMap }); // Call helper
             if (this.activeChords.has(chordId)) {
                  const chordData = this.activeChords.get(chordId);
                  if (chordData.cleanupTimeoutId) clearTimeout(chordData.cleanupTimeoutId);
@@ -550,7 +555,7 @@ class AEInstrumentPianoChord {
              if (chordData.panner) try { chordData.panner.disconnect(); } catch (e) {}
              if (chordData.chordFilter) try { chordData.chordFilter.disconnect(); } catch (e) {}
         } catch (e) {
-             console.error(`${this.MODULE_ID}: Error disconnecting nodes for chord ${chordId}:`, e);
+             console.warn(`${this.MODULE_ID}: Error disconnecting nodes for chord ${chordId}:`, e);
         } finally {
              if (chordData.cleanupTimeoutId) clearTimeout(chordData.cleanupTimeoutId);
              this.activeChords.delete(chordId);
@@ -580,18 +585,35 @@ class AEInstrumentPianoChord {
          }
      }
 
+    /** Cleans up partially created nodes if chord creation fails mid-way. */
+    _cleanupPartialChord(nodes) {
+        console.warn(`${this.MODULE_ID}: Cleaning up partially created chord nodes.`);
+        const { panner, chordFilter, activeNotesMap } = nodes;
+        if (panner) try { panner.disconnect(); } catch(e) {}
+        if (chordFilter) try { chordFilter.disconnect(); } catch(e) {}
+        if (activeNotesMap) {
+             activeNotesMap.forEach(noteData => {
+                if (noteData.envGain) try { noteData.envGain.disconnect(); } catch(e) {}
+                if (noteData.oscNodes) {
+                     noteData.oscNodes.forEach(osc => { if (osc) try { osc.disconnect(); } catch(e) {} });
+                }
+             });
+        }
+    }
+
     /** Calculates chord frequencies with optional voicing variation. */
     _calculateChordFrequencies() {
         try {
             const { baseFreq, scale: scaleName, chordNotes, chordOctaveOffset, voicingVariation } = { ...this.defaultChordSettings, ...this.settings };
             const scaleMap = typeof musicalScales !== 'undefined' ? musicalScales : null;
-            if (!scaleMap || !scaleMap[scaleName]) {
-                console.warn(`${this.MODULE_ID}: Scale '${scaleName}' not found. Using major.`);
-                scaleName = 'major';
-                if (!scaleMap || !scaleMap[scaleName]) throw new Error("Fallback scale 'major' not found.");
+            let currentScaleName = scaleName; // Use mutable variable for potential fallback
+            if (!scaleMap || !scaleMap[currentScaleName]) {
+                console.warn(`${this.MODULE_ID}: Scale '${currentScaleName}' not found. Using major.`);
+                currentScaleName = 'major';
+                if (!scaleMap || !scaleMap[currentScaleName]) throw new Error("Fallback scale 'major' not found.");
             }
-            const scale = scaleMap[scaleName];
-            if (!scale || scale.length === 0) throw new Error(`Scale '${scaleName}' is empty.`);
+            const scale = scaleMap[currentScaleName];
+            if (!scale || scale.length === 0) throw new Error(`Scale '${currentScaleName}' is empty.`);
             if (!Array.isArray(chordNotes) || chordNotes.length === 0) throw new Error("chordNotes array is invalid or empty.");
 
             let currentChordNotes = [...chordNotes]; // Copy base intervals
@@ -630,14 +652,14 @@ class AEInstrumentPianoChord {
                 // A better approach uses exact scale degrees if chordNotes are scale indices
                 // Assuming chordNotes ARE semitone intervals from root for now
                 const semitoneOffset = interval; // Use interval directly as semitone offset
-                const totalOctave = chordOctaveOffset + intervalOctave;
+                const totalOctave = (chordOctaveOffset || 0) + intervalOctave; // Ensure chordOctaveOffset is number
                 const freq = baseFreq * Math.pow(2, (semitoneOffset + totalOctave * 12) / 12);
                 if (isNaN(freq) || freq <= 0) throw new Error(`Invalid frequency calculated: ${freq}`);
                 return freq;
             });
 
             // Filter out any potential invalid frequencies again just in case
-            return frequencies.filter(f => f > 0);
+            return frequencies.filter(f => f > 0 && isFinite(f)); // Add check for finite
 
         } catch (error) {
              console.error(`${this.MODULE_ID}: Error calculating chord frequencies:`, error);

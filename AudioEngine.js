@@ -1,7 +1,7 @@
 // AudioEngine.js - Modular Audio Engine Coordinator
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 3.1.1 (Enhanced Audio Analyzer and Error Handling)
+// Version: 3.1.3 (Added Auto-Stabilization for Initial Playback)
 
 /**
  * @class AudioEngine
@@ -22,7 +22,7 @@ class AudioEngine {
         
         // --- Core State ---
         this.isPlaying = initialIsPlaying;
-        this.volume = initialVolume;
+        this.volume = initialVolume; // This is the TARGET volume
         this.currentMood = initialMood;
         this.audioContext = null;
         this.isInitialized = false;
@@ -34,6 +34,18 @@ class AudioEngine {
         this._analyzerDiagnosticRun = false;
         this._lastAnalyzerCheck = 0;
         this._silenceLogged = false;
+        this._usingFakeData = false; // Track if using fake analyzer data
+
+        // --- Auto-Stabilization ---
+        this._pendingAutoStabilization = false; // Flag to prevent recursive stabilization
+
+        // --- Default Engine Settings ---
+        this.defaultEngineSettings = {
+            masterAttackTime: 0.8,  // Master fade-in (seconds)
+            masterReleaseTime: 1.5, // Master fade-out (seconds)
+            stabilizationDelay: 80, // Milliseconds after initial play before auto-stabilization
+            stabilizationPauseDuration: 30, // Milliseconds to pause during stabilization
+        };
         
         // Use performance.now() for clock if THREE is not guaranteed globally here
         this.clock = {
@@ -78,6 +90,7 @@ class AudioEngine {
         this.masterLimiter = null;
         this.masterAnalyser = null; 
         this.dummyOscillator = null; // For analyzer testing
+        this.dummyGain = null; // Gain for dummy osc
         this.masterReverb = null;
         this.masterCompressor = null;
         this.masterEQ = null; // Placeholder for potential EQ structure
@@ -87,8 +100,7 @@ class AudioEngine {
         this.audioModules = {}; // Stores active module instances { key: instance }
         this.loadedModuleClasses = {}; // Stores loaded class constructors { key: class }
         this._moduleErrorCounts = {}; // Track errors per module
-        // Configuration moved to EmotionAudioList.js, but keep a reference placeholder if needed
-        // this.moduleConfig = {}; // Config is now primarily driven by EmotionAudioModules
+        this._moodTransitionTimeouts = []; // Store timeouts for disposal cleanup
 
         // --- Audio Data for Visualization ---
         this.audioData = null; // Uint8Array, initialized later
@@ -96,25 +108,27 @@ class AudioEngine {
 
         // --- Initialization ---
         try {
-            this.initAudioCore();
-            this.loadModules(); // Load classes based on all ae_*.js files found
+            this.initAudioCore(); // Initialize context and master chain
+            this.loadModules();   // Load module classes
 
             // --- SET INITIALIZED FLAG *BEFORE* INITIAL MOOD SETUP ---
             this.isInitialized = true;
             console.log("AudioEngine: Core initialized, setting initial mood...");
 
-            this.changeMood(this.currentMood, true); // Initial setup without transition
+            // --- Now safe to call changeMood for initial setup ---
+            // This will initialize modules but NOT start them if initialIsPlaying is false
+            this.changeMood(this.currentMood, true);
 
             // --- Start update loop AFTER initialization is complete ---
             this._startUpdateLoop(); // Start the internal update loop
+
             console.log("AudioEngine: Initialization complete.");
         } catch (error) {
             this._logError('Initialization', 'Failed to initialize audio engine', error, true);
-            this.isInitialized = false;
+            this.isInitialized = false; // Ensure flag remains false on error
             if (typeof ToastSystem !== 'undefined') {
                 ToastSystem.notify('error', `Audio Engine failed to initialize: ${error.message}. Audio disabled.`);
             }
-            // Attempt cleanup
             this.dispose();
         }
     }
@@ -798,10 +812,6 @@ class AudioEngine {
     }
 
     /**
-     * Check audio signal paths and connectivity
-     * @private
-     */
-    /**
      * Check audio signal paths and connectivity periodically.
      * Runs diagnostics if prolonged silence is detected while playing.
      * This method is called internally by the update loop.
@@ -1209,11 +1219,51 @@ class AudioEngine {
             this._logError('PlayState', 'Error synchronizing module play states', error);
         }
     }
+    
+    /**
+     * Performs an auto-stabilization pause/resume cycle.
+     * This quickly pauses and resumes all audio modules to fix initialization issues.
+     * @private
+     */
+    _executeAutoStabilization() {
+        console.log("AudioEngine: Executing auto-stabilization (quick pause/resume)");
+        
+        try {
+            if (!this.audioContext || !this.isPlaying) return;
+            
+            // 1. Quick pause all modules (without changing this.isPlaying flag)
+            this._syncModulesPlayState(false);
+            
+            // 2. Wait a very short time, then restart
+            setTimeout(() => {
+                if (this.isInitialized && this.isPlaying) {
+                    console.log("AudioEngine: Auto-stabilization - resuming playback");
+                    
+                    // 3. Restart all modules
+                    this._syncModulesPlayState(true);
+                    
+                    // 4. Apply a fresh master fade-in
+                    const now = this.audioContext.currentTime;
+                    const gainParam = this.masterOutputGain.gain;
+                    const attackTime = this.defaultEngineSettings.masterAttackTime;
+                    
+                    gainParam.cancelScheduledValues(now);
+                    gainParam.setValueAtTime(0.2, now);
+                    gainParam.linearRampToValueAtTime(this.volume, now + attackTime);
+                    
+                    console.log("AudioEngine: Auto-stabilization complete");
+                }
+            }, this.defaultEngineSettings.stabilizationPauseDuration);
+        } catch (error) {
+            console.error("AudioEngine: Error during auto-stabilization:", error);
+        }
+    }
 
     // --- Public API Methods ---
 
     /**
-     * Sets the playback state (playing or paused), handling AudioContext resume.
+     * Sets the playback state (playing or paused), handling AudioContext resume
+     * and applying master fade-in/out envelopes.
      * @param {boolean} playing - True to play, false to pause.
      * @param {string} [newMood] - Optional: If changing mood simultaneously.
      * @returns {boolean} Success of the operation
@@ -1224,9 +1274,9 @@ class AudioEngine {
             return false;
         }
 
+        // Avoid redundant calls if state is already correct and no mood change requested
         if (this.isPlaying === playing && (!newMood || newMood === this.currentMood)) {
-             // console.log(`AudioEngine: Engine is already ${playing ? 'playing' : 'stopped'} and mood is unchanged.`);
-             return true; // Already in requested state
+            return true;
         }
 
         console.log(`AudioEngine: Setting playback state to ${playing}${newMood ? ` (with mood change to ${newMood})` : ''}`);
@@ -1235,33 +1285,42 @@ class AudioEngine {
             // --- Handle AudioContext State ---
             if (playing && this.audioContext && this.audioContext.state === 'suspended') {
                 console.warn("AudioEngine: AudioContext is suspended. Attempting to resume before playing...");
-                // Attempt to resume. The actual playing will happen once resumed (or fail).
-                // We don't change this.isPlaying here yet.
                 this.audioContext.resume()
                     .then(() => {
                         console.log("AudioEngine: AudioContext resumed successfully by setPlaying.");
-                        // Now that it's resumed, set the state and continue
-                        this.isPlaying = true;
-                        this._continueSetPlaying(true, newMood); // Finish the process
+                        this.isPlaying = true; // Update state *after* successful resume
+                        this._applyMasterEnvelopeAndSyncModules(true, newMood); // Finish the process
+                        
+                        // Schedule auto-stabilization if we've just started playing
+                        if (!this._pendingAutoStabilization) {
+                            this._scheduleAutoStabilization();
+                        }
                     })
                     .catch(err => {
                         this._logError('PlayControl', 'Failed to resume AudioContext on play attempt', err);
-                        // Remain paused if resume fails
-                        this.isPlaying = false;
+                        this.isPlaying = false; // Remain paused if resume fails
                         if (typeof ToastSystem !== 'undefined') {
                             ToastSystem.notify('warning', 'Click/Tap the screen to enable audio.');
                         }
                     });
-                return true; // Return true as we are handling the async resume
+                return true; // Handled async resume
             } else if (playing && this.audioContext && this.audioContext.state === 'closed') {
                 this._logError('PlayControl', 'Cannot play, AudioContext is closed.', null, true);
-                this.isPlaying = false; // Ensure state is correct
+                this.isPlaying = false;
                 return false;
             }
 
-            // If context is running, or if we are stopping playback:
+            // --- If context is running or stopping ---
+            const wasPlaying = this.isPlaying;
             this.isPlaying = playing; // Update internal state
-            this._continueSetPlaying(playing, newMood); // Call helper to handle mood change and sync
+
+            // Apply master envelope and sync modules
+            this._applyMasterEnvelopeAndSyncModules(playing, newMood);
+            
+            // If we're starting playback, schedule the auto-stabilization
+            if (playing && !wasPlaying && !this._pendingAutoStabilization) {
+                this._scheduleAutoStabilization();
+            }
 
             return true;
         } catch (error) {
@@ -1270,29 +1329,109 @@ class AudioEngine {
             return false;
         }
     }
-
+    
     /**
-     * Helper function to continue the setPlaying logic after context check/resume.
-     * @param {boolean} playing - The target play state.
-     * @param {string} [newMood] - Optional new mood.
+     * Schedules the auto-stabilization pause/resume cycle after a short delay.
      * @private
      */
-    _continueSetPlaying(playing, newMood) {
-        try {
-            // If a mood change is also happening, handle it first
-            if (newMood && newMood !== this.currentMood) {
-                this.changeMood(newMood); // changeMood will handle module sync internally if playing starts
-            } else {
-                // Sync modules to the new play state immediately
-                this._syncModulesPlayState(playing); // Use the 'playing' argument passed in
+    _scheduleAutoStabilization() {
+        // Set flag to prevent multiple stabilizations
+        this._pendingAutoStabilization = true;
+        
+        // Schedule stabilization after a short delay
+        setTimeout(() => {
+            if (this.isInitialized && this.isPlaying) {
+                this._executeAutoStabilization();
             }
-        } catch (error) {
-            this._logError('PlayControl', 'Error in continued play state setting', error);
-        }
+            this._pendingAutoStabilization = false;
+        }, this.defaultEngineSettings.stabilizationDelay);
+        
+        console.log(`AudioEngine: Scheduled auto-stabilization in ${this.defaultEngineSettings.stabilizationDelay}ms`);
     }
 
     /**
+     * Helper to apply master gain envelope and sync modules. Separated for clarity.
+     * @param {boolean} playing - Target play state.
+     * @param {string} [newMood] - Optional new mood.
+     * @param {boolean} [previousState] - The previous playing state (optional).
+     * @private
+     */
+    _applyMasterEnvelopeAndSyncModules(playing, newMood, previousState = !playing) {
+        if (!this.audioContext || !this.masterOutputGain) {
+            console.error("AudioEngine: Cannot apply master envelope - context or gain node missing.");
+            return;
+        }
+
+        try {
+            const now = this.audioContext.currentTime;
+            const gainParam = this.masterOutputGain.gain;
+
+            // Cancel any existing ramps on the master gain
+            gainParam.cancelScheduledValues(now);
+
+            if (playing) {
+                // --- FADE IN MASTER VOLUME ---
+                const targetVolume = this.volume; // Use the current target volume
+                const attackTime = this.defaultEngineSettings.masterAttackTime;
+                console.log(`AudioEngine: Applying master fade-in over ${attackTime}s to volume ${targetVolume.toFixed(2)}`);
+
+                // Start from near zero ONLY if it wasn't already playing (or if gain is currently low)
+                // This prevents interrupting an existing sound or fade-out abruptly
+                const currentActualGain = gainParam.value;
+                if (!previousState || currentActualGain < 0.01) {
+                    gainParam.setValueAtTime(0.0001, now);
+                } else {
+                    // If already playing (e.g., mood change during play), start ramp from current level
+                    gainParam.setValueAtTime(currentActualGain, now);
+                }
+                // Ramp to target volume
+                gainParam.linearRampToValueAtTime(targetVolume, now + attackTime);
+
+                // Handle mood change *before* syncing play state if needed
+                if (newMood && newMood !== this.currentMood) {
+                    this.changeMood(newMood); // changeMood internally handles module transitions
+                    // changeMood might call stop/play internally, let it manage sync
+                } else {
+                    // If no mood change, sync modules to start playing now
+                    this._syncModulesPlayState(true);
+                }
+
+            } else {
+                // --- FADE OUT MASTER VOLUME ---
+                const releaseTime = this.defaultEngineSettings.masterReleaseTime;
+                const timeConstant = releaseTime / 3.0;
+                console.log(`AudioEngine: Applying master fade-out over ~${releaseTime.toFixed(1)}s`);
+
+                // Start release from current actual gain value
+                const currentActualGain = gainParam.value;
+                gainParam.setValueAtTime(currentActualGain, now);
+                // Exponential decay to silence
+                gainParam.setTargetAtTime(0.0001, now, timeConstant);
+
+                // Sync modules to stop (they will handle their own release envelopes)
+                this._syncModulesPlayState(false);
+
+                // If mood change happened during stop, handle it after stop sync
+                if (newMood && newMood !== this.currentMood) {
+                    this.changeMood(newMood); // Will dispose/init modules, but they won't auto-play
+                }
+            }
+
+             // Reset analyzer diagnostics when play state changes
+             this._analyzerSilentFrames = 0;
+             this._analyzerDiagnosticRun = false;
+             this._silenceLogged = false;
+
+        } catch (error) {
+            this._logError('MasterEnvelope', 'Error applying master envelope or syncing modules', error);
+        }
+    }
+
+
+    /**
      * Changes the current mood and updates audio modules accordingly.
+     * NOTE: This method now focuses on module transitions. The actual start/stop
+     * of modules based on the engine's isPlaying state is handled by setPlaying.
      * @param {string} newMood - The key of the new mood (e.g., 'calm', 'cosmic').
      * @param {boolean} [isInitialSetup=false] - Flag to skip transitions during initial load.
      * @returns {boolean} Success of the operation
@@ -1302,193 +1441,190 @@ class AudioEngine {
             console.warn("AudioEngine: Cannot change mood - engine is not initialized");
             return false;
         }
-        
+        if (newMood === this.currentMood && !isInitialSetup) {
+            // console.log(`AudioEngine: Mood '${newMood}' is already active.`);
+            return true; // No change needed
+        }
+
         try {
             // Validate mood key and existence of settings
-            if (!newMood) {
-                throw new Error('No mood specified');
-            }
-            
-            // Check if all required configurations exist
-            const hasMoodSettings = typeof moodAudioSettings !== 'undefined' && moodAudioSettings[newMood];
-            const hasEmotionModules = typeof EmotionAudioModules !== 'undefined' && EmotionAudioModules[newMood];
-            
-            if (!hasMoodSettings || !hasEmotionModules) {
-                const missingConfigs = [];
-                if (!hasMoodSettings) missingConfigs.push('moodAudioSettings');
-                if (!hasEmotionModules) missingConfigs.push('EmotionAudioModules');
-                
-                throw new Error(`Invalid or unknown mood requested: '${newMood}' or missing configs: ${missingConfigs.join(', ')}`);
-            }
-            
-            if (newMood === this.currentMood && !isInitialSetup) {
-                console.log(`AudioEngine: Mood '${newMood}' is already active.`);
-                return true; // No change needed unless it's the initial setup call
+            if (!newMood || typeof moodAudioSettings === 'undefined' || !moodAudioSettings[newMood] || typeof EmotionAudioModules === 'undefined' || !EmotionAudioModules[newMood]) {
+                const details = `Mood: ${newMood}, Settings found: ${!!(typeof moodAudioSettings !== 'undefined' && moodAudioSettings[newMood])}, Modules found: ${!!(typeof EmotionAudioModules !== 'undefined' && EmotionAudioModules[newMood])}`;
+                throw new Error(`Invalid mood or missing configurations for '${newMood}'. Details: ${details}`);
             }
 
             console.log(`AudioEngine: Changing mood from '${this.currentMood}' to '${newMood}'...`);
             const oldMood = this.currentMood;
             this.currentMood = newMood;
             const newSettings = moodAudioSettings[this.currentMood];
-            const transitionTime = isInitialSetup ? 0 : 1.5; // Transition time in seconds (0 for setup)
+            // Use a slightly shorter transition for audio elements compared to visuals maybe
+            const transitionTime = isInitialSetup ? 0 : 1.0;
 
-            // --- Update Master Processing (like Reverb) ---
+            // --- Update Master Processing (Reverb) ---
             try {
                 this._updateMasterReverb(this.currentMood);
             } catch (reverbError) {
                 this._logError('MoodChange', 'Error updating master reverb during mood change', reverbError);
-                // Continue despite reverb error
             }
 
-            // --- Re-initialize or Transition Modules ---
-            if (isInitialSetup) {
-                // On initial setup, just initialize modules for the new mood
-                const success = this._initModulesForMood(this.currentMood, newSettings);
-                
-                // If initial state is playing, start the modules *after* init
-                if (success && this.isPlaying && this.audioContext?.state === 'running') {
-                    this._syncModulesPlayState(true);
-                }
-            } else {
-                this._handleMoodTransition(oldMood, newMood, newSettings, transitionTime);
-            }
+            // --- Handle Module Transitions ---
+            this._handleMoodTransition(oldMood, newMood, newSettings, transitionTime);
 
-            console.log(`AudioEngine: Mood change to '${this.currentMood}' completed.`);
+            console.log(`AudioEngine: Mood change to '${this.currentMood}' configuration applied.`);
             return true;
+
         } catch (error) {
             this._logError('MoodChange', `Failed to change mood to '${newMood}'`, error);
-            
             if (typeof ToastSystem !== 'undefined') {
-                ToastSystem.notify('warning', `Could not change to mood: ${newMood}`);
+                ToastSystem.notify('warning', `Could not change audio mood to: ${newMood}`);
             }
-            
-            // Keep the old mood if change failed
-            if (this.currentMood !== oldMood) {
-                this.currentMood = oldMood || 'calm'; // Fallback to 'calm' if oldMood isn't set
-            }
+            // Revert mood state if change failed
+            this.currentMood = oldMood || 'calm';
             return false;
         }
     }
 
+
     /**
-     * Handles the transition between moods, including stopping unneeded modules and starting new ones
-     * @param {string} oldMood - The previous mood
-     * @param {string} newMood - The new mood
-     * @param {object} newSettings - Settings for the new mood
-     * @param {number} transitionTime - Transition time in seconds
+     * Handles the transition between moods for audio modules.
+     * @param {string} oldMood - The previous mood key.
+     * @param {string} newMood - The new mood key.
+     * @param {object} newSettings - Settings for the new mood.
+     * @param {number} transitionTime - Transition time in seconds.
      * @private
      */
     _handleMoodTransition(oldMood, newMood, newSettings, transitionTime) {
+        // Clear any pending transition timeouts
+        this._moodTransitionTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+        this._moodTransitionTimeouts = [];
+
         try {
-            // 1. Identify modules active in the *new* mood
             const modulesForNewMood = EmotionAudioModules[newMood] || EmotionAudioModules.default || [];
             const modulesForOldMood = EmotionAudioModules[oldMood] || EmotionAudioModules.default || [];
+            const currentActiveModuleKeys = Object.keys(this.audioModules); // Get keys (class names) of currently running instances
 
-            // 2. Stop and dispose modules active in *old* mood but NOT in *new* mood
-            const modulesToDispose = [];
-            
-            for (const moduleKey of modulesForOldMood) {
-                if (!modulesForNewMood.includes(moduleKey)) {
-                    const moduleInstance = this.audioModules[moduleKey];
-                    if (moduleInstance) {
-                         console.log(`AudioEngine: Stopping & disposing module '${moduleKey}' (not in new mood).`);
-                         try {
-                             if (typeof moduleInstance.stop === 'function') {
-                                 moduleInstance.stop(this.audioContext.currentTime, 0.2); // Quick fade out
-                             }
-                             
-                             // Schedule disposal slightly after stop
-                             const timeoutId = setTimeout(() => {
-                                 try {
-                                     if (this.audioModules[moduleKey] === moduleInstance && typeof moduleInstance.dispose === 'function') {
-                                         moduleInstance.dispose();
-                                         delete this.audioModules[moduleKey];
-                                         console.log(`AudioEngine: Disposed module '${moduleKey}' after transition`);
-                                     }
-                                 } catch (disposeError) {
-                                     this._logError('MoodTransition', `Error disposing module ${moduleKey} after stop`, disposeError);
-                                 }
-                             }, 300);
-                             
-                             modulesToDispose.push({
-                                 key: moduleKey,
-                                 instance: moduleInstance,
-                                 timeoutId: timeoutId
-                             });
-                         } catch (stopError) {
-                             this._logError('MoodTransition', `Error stopping module ${moduleKey}`, stopError);
-                         }
-                    }
+            // --- Identify modules to stop/dispose, keep/update, add/initialize ---
+            const modulesToStopDispose = [];
+            const modulesToUpdate = [];
+            const modulesToAddInit = [];
+
+            // Check current instances against the old mood list
+            currentActiveModuleKeys.forEach(className => {
+                const moduleKey = this._findModuleKeyByClassName(className, modulesForOldMood); // Find original key (e.g., ae_pads)
+                if (moduleKey && !modulesForNewMood.includes(moduleKey)) {
+                    modulesToStopDispose.push(className); // Need to stop this one
+                } else if (moduleKey && modulesForNewMood.includes(moduleKey)) {
+                    modulesToUpdate.push(className); // Keep and update this one
+                } else {
+                    // This module instance exists but wasn't listed for the old mood? Or key mismatch?
+                    console.warn(`AudioEngine: Module instance '${className}' exists but wasn't expected for old mood '${oldMood}'. Marking for disposal.`);
+                    modulesToStopDispose.push(className);
                 }
+            });
+
+            // Check modules needed for the new mood
+            modulesForNewMood.forEach(moduleKey => {
+                const className = this._deriveClassName(moduleKey);
+                if (!currentActiveModuleKeys.includes(className)) {
+                    modulesToAddInit.push(moduleKey); // Need to add this one
+                }
+                // If it was already identified in modulesToUpdate, it's handled there.
+            });
+
+
+            // --- Execute Actions ---
+
+            // 1. Stop and Schedule Disposal for outgoing modules
+            console.log(`AudioEngine: Modules to Stop/Dispose: [${modulesToStopDispose.join(', ')}]`);
+            modulesToStopDispose.forEach(className => {
+                const moduleInstance = this.audioModules[className];
+                if (moduleInstance) {
+                    try {
+                        if (typeof moduleInstance.stop === 'function') {
+                            moduleInstance.stop(this.audioContext.currentTime, transitionTime * 0.2); // Faster fade for removal
+                        }
+                        // Schedule disposal after a short delay
+                        const timeoutId = setTimeout(() => {
+                            try {
+                                // Check if it still exists before disposing
+                                if (this.audioModules[className] === moduleInstance && typeof moduleInstance.dispose === 'function') {
+                                    moduleInstance.dispose();
+                                    delete this.audioModules[className]; // Remove from active map
+                                    console.log(`AudioEngine: Disposed transitioning module '${className}'.`);
+                                }
+                            } catch (disposeError) { this._logError('MoodTransition', `Error disposing module ${className}`, disposeError); }
+                        }, transitionTime * 1000 * 0.3); // Dispose after 30% of transition time
+                        this._moodTransitionTimeouts.push(timeoutId); // Track timeout
+                    } catch (stopError) { this._logError('MoodTransition', `Error stopping module ${className}`, stopError); }
+                }
+            });
+
+            // 2. Update modules staying active
+            console.log(`AudioEngine: Modules to Update: [${modulesToUpdate.join(', ')}]`);
+            modulesToUpdate.forEach(className => {
+                const moduleInstance = this.audioModules[className];
+                if (moduleInstance && typeof moduleInstance.changeMood === 'function') {
+                    try {
+                        moduleInstance.changeMood(newMood, newSettings, transitionTime);
+                    } catch (changeError) { this._logError('MoodTransition', `Error calling changeMood on module ${className}`, changeError); }
+                } else if (moduleInstance) {
+                    console.warn(`AudioEngine: Module '${className}' has no changeMood method, cannot update smoothly.`);
+                    // Optionally stop/re-init if update is critical
+                }
+            });
+
+            // 3. Initialize and potentially start new modules
+            console.log(`AudioEngine: Modules to Add/Init: [${modulesToAddInit.join(', ')}]`);
+            modulesToAddInit.forEach(moduleKey => {
+                const className = this._deriveClassName(moduleKey);
+                const ModuleClass = this.loadedModuleClasses[className];
+                if (ModuleClass) {
+                    try {
+                        const moduleInstance = new ModuleClass();
+                        moduleInstance.init(this.audioContext, this.masterInputGain, newSettings, newMood);
+                        this.audioModules[className] = moduleInstance; // Add to active map
+                        // If the engine is currently playing, start the new module
+                        if (this.isPlaying && typeof moduleInstance.play === 'function' && this.audioContext?.state === 'running') {
+                            // Start slightly delayed to allow init and avoid overwhelming the system
+                            moduleInstance.play(this.audioContext.currentTime + transitionTime * 0.1);
+                            console.log(`AudioEngine: Started new module '${className}' during transition.`);
+                        }
+                    } catch (initError) { this._logError('MoodTransition', `Error initializing new module ${className}`, initError); }
+                } else {
+                    console.warn(`AudioEngine: Class '${className}' for module key '${moduleKey}' not found during transition init.`);
+                }
+            });
+            
+            // Schedule auto-stabilization if we're currently playing and modules changed
+            if (this.isPlaying && (modulesToAddInit.length > 0 || modulesToUpdate.length > 0) && !this._pendingAutoStabilization) {
+                this._scheduleAutoStabilization();
             }
 
-            // 3. Initialize modules active in *new* mood but NOT currently running
-            const modulesToAdd = [];
-            const failedModules = [];
-            
-            for (const moduleKey of modulesForNewMood) {
-                if (!this.audioModules[moduleKey]) {
-                    const ModuleClass = this.loadedModuleClasses[moduleKey];
-                    if (ModuleClass) {
-                         console.log(`AudioEngine: Initializing new module '${moduleKey}' for mood change.`);
-                         try {
-                             const moduleInstance = new ModuleClass();
-                             moduleInstance.init(this.audioContext, this.masterInputGain, newSettings, newMood);
-                             this.audioModules[moduleKey] = moduleInstance;
-                             modulesToAdd.push(moduleKey);
-                             
-                             // If playing, start the newly added module
-                             if (this.isPlaying && typeof moduleInstance.play === 'function' && this.audioContext?.state === 'running') {
-                                  moduleInstance.play(this.audioContext.currentTime + 0.1); // Start slightly delayed
-                             }
-                         } catch (initError) {
-                             failedModules.push(moduleKey);
-                             this._logError('MoodTransition', `Error initializing new module ${moduleKey}`, initError);
-                         }
-                    } else {
-                         failedModules.push(moduleKey);
-                         console.warn(`AudioEngine: Class for new module ${moduleKey} not found.`);
-                    }
-                }
-            }
-
-            // 4. Call changeMood on modules active in *both* old and new moods
-            const modulesUpdated = [];
-            const moduleUpdateFailed = [];
-            
-            for (const moduleKey of modulesForNewMood) {
-                if (modulesForOldMood.includes(moduleKey)) {
-                    const moduleInstance = this.audioModules[moduleKey];
-                    if (moduleInstance && typeof moduleInstance.changeMood === 'function') {
-                         console.log(`AudioEngine: Calling changeMood() on module '${moduleKey}'.`);
-                         try {
-                             moduleInstance.changeMood(newMood, newSettings, transitionTime);
-                             modulesUpdated.push(moduleKey);
-                         } catch (changeError) {
-                             moduleUpdateFailed.push(moduleKey);
-                             this._logError('MoodTransition', `Error calling changeMood on module ${moduleKey}`, changeError);
-                         }
-                    } else if (moduleInstance) {
-                         moduleUpdateFailed.push(moduleKey);
-                         console.warn(`AudioEngine: Module '${moduleKey}' exists but has no changeMood method.`);
-                         // Optional: Could stop/re-init here if needed, but might cause gaps
-                    }
-                }
-            }
-            
-            console.log(`AudioEngine: Mood transition summary - Removed: ${modulesToDispose.length}, Added: ${modulesToAdd.length}, Updated: ${modulesUpdated.length}, Failed: ${failedModules.length + moduleUpdateFailed.length}`);
-            
-            // Store timeout IDs for cleanup during disposal
-            this._moodTransitionTimeouts = modulesToDispose.map(m => m.timeoutId);
-            
-            // Reset analyzer diagnostics on mood change
-            this._analyzerSilentFrames = 0;
-            this._analyzerDiagnosticRun = false;
-            this._silenceLogged = false;
         } catch (error) {
             this._logError('MoodTransition', 'Error handling mood transition', error);
         }
     }
+
+    /** Helper to derive class name from module key */
+    _deriveClassName(moduleKey) {
+        let derivedName = moduleKey.replace(/^ae_/, '');
+        if (derivedName) {
+            derivedName = derivedName.charAt(0).toUpperCase() + derivedName.slice(1);
+            derivedName = derivedName.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+        }
+        return 'AE' + derivedName;
+    }
+
+     /** Helper to find the original module key (e.g., ae_pads) given a class name (e.g., AEPads) */
+     _findModuleKeyByClassName(className, keyList) {
+         for (const key of keyList) {
+             if (this._deriveClassName(key) === className) {
+                 return key;
+             }
+         }
+         return null; // Not found in the provided list
+     }
+
 
     /**
      * Sets the master output volume.
@@ -1500,47 +1636,33 @@ class AudioEngine {
             console.warn("AudioEngine: Cannot set volume - engine not properly initialized");
             return false;
         }
-        
+
         try {
             // Validate and clamp volume
             if (typeof volume !== 'number' || isNaN(volume)) {
                 throw new Error(`Invalid volume value: ${volume}`);
             }
-            
-            const newVolume = Math.max(0.0, Math.min(1.0, volume)); // Clamp volume
-            if (this.volume === newVolume) return true; // No change needed
 
-            this.volume = newVolume;
+            const newVolume = Math.max(0.0, Math.min(1.0, volume)); // Clamp volume
+            if (Math.abs(this.volume - newVolume) < 0.001) return true; // No significant change needed
+
+            this.volume = newVolume; // Store the target volume
             const rampTime = 0.05; // 50ms ramp to prevent clicks
 
-            // --- ADDED: Logging ---
-            console.log(`AudioEngine: Master volume set to ${this.volume.toFixed(2)}`);
+            console.log(`AudioEngine: Setting master target volume to ${this.volume.toFixed(2)}`);
             if (this.volume < 0.01) {
-                console.warn("AudioEngine: Master volume is near zero!");
+                console.warn("AudioEngine: Master volume target is near zero!");
             }
-            // --- END LOGGING ---
 
             try {
-                // Use cancelAndHoldAtTime if available (safer)
-                if (typeof this.masterOutputGain.gain.cancelAndHoldAtTime === 'function') {
-                    this.masterOutputGain.gain.cancelAndHoldAtTime(this.audioContext.currentTime);
-                    this.masterOutputGain.gain.linearRampToValueAtTime(
-                        this.volume,
-                        this.audioContext.currentTime + rampTime
-                    );
-                } else {
-                    // Fallback to setTargetAtTime
-                    this.masterOutputGain.gain.setTargetAtTime(
-                        this.volume,
-                        this.audioContext.currentTime,
-                        rampTime / 3 // Time constant for setTargetAtTime
-                    );
-                }
+                const gainParam = this.masterOutputGain.gain;
+                const now = this.audioContext.currentTime;
+                // Use setTargetAtTime for a smooth exponential change, generally preferred for volume
+                gainParam.setTargetAtTime(this.volume, now, rampTime / 3); // Time constant
                 return true;
             } catch (rampError) {
                 this._logError('Volume', 'Error during volume ramp, trying direct set', rampError);
-                
-                // Direct set as fallback
+                // Direct set as fallback (might click)
                 try {
                     this.masterOutputGain.gain.setValueAtTime(this.volume, this.audioContext.currentTime);
                     return true;
@@ -1580,40 +1702,27 @@ class AudioEngine {
                 throw new Error('Audio data array has zero length');
             }
             
-            // We already check in _updateAnalyser if the data is all zeros
-            // Here we just return the current data without additional warnings
-            // This fixes the frequent console warnings
-            
             // Generate fake data if we're playing but have no real data for too long
-            // This prevents visualizations from looking broken
             if (this.isPlaying && 
                 this.audioContext && 
                 this.audioContext.state === 'running' &&
                 this._analyzerSilentFrames > this._maxSilentFrames) {
                 
-                // Check if we had real data within the last 5 seconds
                 const timeSinceLastData = Date.now() - this._lastNonZeroDataTime;
                 
-                // Only generate fake data if we haven't had real data for a while and
-                // we've already attempted diagnostics
                 if (timeSinceLastData > 5000 && this._analyzerDiagnosticRun) {
-                    // Fill with some minimal fake data (only log this once)
                     if (!this._usingFakeData) {
                         console.log("AudioEngine: Using synthetic data for visualization due to lack of real audio data");
                         this._usingFakeData = true;
                     }
-                    
-                    // Create pulsing synthetic data
                     const fakeLevel = (Math.sin(Date.now() * 0.002) * 0.5 + 0.5) * 40;
                     for (let i = 0; i < this.audioData.length; i++) {
-                        // Generate a spectrum-like curve with higher values in lower frequencies
                         const frequencyFactor = 1 - (i / this.audioData.length);
                         this.audioData[i] = Math.max(0, Math.min(255, 
                             Math.floor(fakeLevel * frequencyFactor * frequencyFactor * Math.random())));
                     }
                 }
             } else if (this._usingFakeData) {
-                // Reset fake data flag when we have real data again
                 this._usingFakeData = false;
             }
             
@@ -1645,7 +1754,7 @@ class AudioEngine {
             }
             
             return {
-                version: '3.1.1 (Enhanced Audio Analyzer and Error Handling)',
+                version: '3.1.3 (Added Auto-Stabilization for Initial Playback)', // Updated version
                 initialized: this.isInitialized,
                 playing: this.isPlaying,
                 mood: this.currentMood,
@@ -1654,6 +1763,7 @@ class AudioEngine {
                 sampleRate: this.audioContext ? this.audioContext.sampleRate : 0,
                 moduleCount: Object.keys(this.audioModules).length,
                 moduleClassCount: Object.keys(this.loadedModuleClasses).length,
+                pendingAutoStabilization: this._pendingAutoStabilization,
                 modules: moduleStates,
                 analyzerStats: {
                     silentFrames: this._analyzerSilentFrames,
@@ -1703,6 +1813,12 @@ class AudioEngine {
                     .catch(err => console.error("AudioEngine: Failed to resume AudioContext:", err));
             }
             
+            // If playing, perform an auto-stabilization to fix potential issues
+            if (this.isPlaying && !this._pendingAutoStabilization) {
+                console.log("AudioEngine: Performing manual auto-stabilization");
+                this._scheduleAutoStabilization();
+            }
+            
             // Run analyzer diagnostic regardless of current silent frame count
             this._runAnalyzerDiagnostic();
             
@@ -1710,7 +1826,9 @@ class AudioEngine {
             this._checkModuleOutputs();
             
             // Check master volumes
-            console.log(`AudioEngine: Master volume is ${this.volume}`);
+            console.log(`AudioEngine: Master volume target is ${this.volume}`);
+            if(this.masterOutputGain) console.log(`AudioEngine: Master output gain actual value is ~${this.masterOutputGain.gain.value.toFixed(3)}`);
+
             
             return true;
         } catch (error) {
@@ -1782,7 +1900,7 @@ class AudioEngine {
                 try {
                     if (node) {
                         node.disconnect();
-                        console.log(`AudioEngine: Disconnected ${name}`);
+                        // console.log(`AudioEngine: Disconnected ${name}`); // Reduce log noise
                     }
                 } catch (disconnectError) {
                     console.error(`AudioEngine: Error disconnecting ${name}:`, disconnectError);
