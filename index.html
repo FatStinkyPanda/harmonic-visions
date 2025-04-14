@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <!-- Core Metadata -->
-    <title>Harmonic Visions: An Immersive Audiovisual Journey</title>
-    <meta name="description" content="Experience Harmonic Visions, a transcendent fusion of evolving landscapes, generative soundscapes, and responsive visuals designed for relaxation, meditation, and wonder.">
-    <meta name="keywords" content="audiovisual, generative art, ambient music, relaxation, meditation, three.js, web audio, interactive, immersive, transcendence, FatStinkyPanda">
+    <title>Harmonic Visions: An Immersive Audiovisual Journey (Modular)</title>
+    <meta name="description" content="Experience Harmonic Visions, a transcendent fusion of evolving landscapes, generative soundscapes, and responsive visuals designed for relaxation, meditation, and wonder. Now with a modular visual and audio structure.">
+    <meta name="keywords" content="audiovisual, generative art, ambient music, relaxation, meditation, three.js, web audio, interactive, immersive, transcendence, FatStinkyPanda, modular">
     <meta name="author" content="FatStinkyPanda">
     <meta name="theme-color" content="#0a0a12">
 
@@ -18,14 +18,14 @@
     <meta property="og:title" content="Harmonic Visions: Transcendent Experience">
     <meta property="og:description" content="An immersive journey through evolving landscapes and harmonious sounds.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="[YOUR_APP_URL_HERE]">
-    <meta property="og:image" content="[URL_TO_PREVIEW_IMAGE_HERE]">
+    <meta property="og:url" content="[YOUR_APP_URL_HERE]"> <!-- Replace with actual URL -->
+    <meta property="og:image" content="[URL_TO_PREVIEW_IMAGE_HERE]"> <!-- Replace with actual Image URL -->
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Harmonic Visions: Transcendent Experience">
     <meta name="twitter:description" content="An immersive journey through evolving landscapes and harmonious sounds.">
-    <meta name="twitter:image" content="[URL_TO_PREVIEW_IMAGE_HERE]">
+    <meta name="twitter:image" content="[URL_TO_PREVIEW_IMAGE_HERE]"> <!-- Replace with actual Image URL -->
 
     <!-- Preconnect to CDNs -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -41,7 +41,7 @@
     <link rel="stylesheet" href="styles.css">
 
     <style>
-      /* Critical styles for immediate rendering */
+      /* Critical styles for immediate rendering (Keep your existing styles.css content here or linked) */
       :root {
         --primary-color: #2c3e50;
         --secondary-color: #3498db;
@@ -57,7 +57,7 @@
         --background-color: #0a0a12;
         --text-color: #ecf0f1;
         /* Disclaimer Height Variable */
-        --disclaimer-height: 60px; /* Default height, adjust as needed */
+        --disclaimer-height: 0px; /* Default height, JS will update */
       }
 
       body, html {
@@ -72,277 +72,211 @@
 
       /* Initial loading indicator */
       #initial-loader {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
         background: radial-gradient(ellipse at center, #0f1118 0%, #060913 100%);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        z-index: 9999;
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        z-index: 9999; transition: opacity 0.5s ease-out;
       }
-
       .spinner {
-        width: 60px;
-        height: 60px;
-        border: 3px solid rgba(52, 152, 219, 0.1);
-        border-radius: 50%;
-        border-top-color: var(--secondary-color);
-        border-left-color: var(--accent-color);
-        animation: spin 1.2s linear infinite;
-        margin-bottom: 20px;
+        width: 60px; height: 60px; border: 3px solid rgba(52, 152, 219, 0.1);
+        border-radius: 50%; border-top-color: var(--secondary-color);
+        border-left-color: var(--accent-color); animation: spin 1.2s linear infinite; margin-bottom: 20px;
       }
+      .loading-text { font-size: 1.2rem; color: var(--text-color); text-align: center; max-width: 80%; }
+      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-      .loading-text {
-        font-size: 1.2rem;
-        color: var(--text-color);
-        text-align: center;
-        max-width: 80%;
-      }
+      /* Enhanced loading indicator from styles.css */
+       .loading-indicator { /* Copied from styles.css */
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--background-color); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 2000; gap: 20px;
+            transition: opacity 0.5s ease;
+        }
+       .loading-indicator.fade-out { opacity: 0; pointer-events: none; }
+       .premium-loading { background: radial-gradient(ellipse at center, #0f1118 0%, #060913 100%); }
+       .spinner-container { position: relative; width: 80px; height: 80px; }
+       .premium-loading .spinner { /* Adjusted spinner for premium */
+            width: 70px; height: 70px; border: 3px solid rgba(52, 152, 219, 0.1);
+            border-radius: 50%; border-top-color: var(--secondary-color);
+            border-left-color: var(--accent-color); animation: enhanced-spin 1.2s ease-in-out infinite;
+            box-shadow: 0 0 20px rgba(52, 152, 219, 0.3);
+        }
+       .spinner-inner {
+            position: absolute; top: 15px; left: 15px; width: 40px; height: 40px;
+            border: 3px solid rgba(155, 89, 182, 0.1); border-radius: 50%;
+            border-right-color: var(--accent-color); border-bottom-color: var(--secondary-color);
+            animation: enhanced-spin 0.8s ease-in-out infinite reverse;
+        }
+       .premium-loading .loading-text {
+            font-size: 1.2rem; color: rgba(236, 240, 241, 0.9); text-transform: uppercase;
+            letter-spacing: 3px; font-weight: 300; animation: pulse 2s infinite;
+        }
+       .loading-subtitle {
+            font-size: 0.9rem; color: rgba(236, 240, 241, 0.6); font-style: italic;
+            margin-top: -10px; font-family: 'Cormorant Garamond', serif; letter-spacing: 1px;
+        }
+       @keyframes enhanced-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+       @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
 
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-
-      /* Enhanced loading indicator */
-      .loading-indicator {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: var(--background-color);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        z-index: 2000;
-        gap: 20px;
-        transition: opacity 0.5s ease;
-      }
-
-      .loading-indicator.fade-out {
-        opacity: 0;
-        pointer-events: none;
-      }
-
-      /* Premium loading elements */
-      .premium-loading {
-        background: radial-gradient(ellipse at center, #0f1118 0%, #060913 100%);
-      }
-
-      .spinner-container {
-        position: relative;
-        width: 80px;
-        height: 80px;
-      }
-
-      .spinner-inner {
-        position: absolute;
-        top: 20px;
-        left: 20px;
-        width: 40px;
-        height: 40px;
-        border: 2px solid rgba(155, 89, 182, 0.2);
-        border-radius: 50%;
-        border-top-color: var(--accent-color);
-        animation: spin 1s linear infinite reverse;
-      }
-
-      .loading-subtitle {
-        font-size: 0.9rem;
-        color: rgba(236, 240, 241, 0.7);
-        letter-spacing: 2px;
-        margin-top: -10px;
-      }
 
       /* Disclaimer Banner */
-      .disclaimer-banner {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        background: rgba(10, 10, 18, 0.95);
-        backdrop-filter: blur(10px);
-        color: white;
-        z-index: 4000;
-        padding: 12px 20px;
-        font-size: 0.9rem;
-        border-bottom: 1px solid rgba(52, 152, 219, 0.3);
-        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-        transition: transform 0.5s ease-out, opacity 0.5s ease-out; /* Added transitions */
-        transform: translateY(0); /* Start visible */
-        opacity: 1;
-      }
+       .disclaimer-banner { /* Copied from styles.css */
+            position: fixed; top: 0; left: 0; width: 100%;
+            background: rgba(10, 10, 18, 0.95); backdrop-filter: blur(10px); color: white;
+            z-index: 4000; padding: 12px 20px; font-size: 0.9rem;
+            border-bottom: 1px solid rgba(52, 152, 219, 0.3); box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            transition: transform 0.5s ease-out, opacity 0.5s ease-out; transform: translateY(0); opacity: 1;
+        }
+       .disclaimer-banner.hidden { transform: translateY(-100%); opacity: 0; pointer-events: none; }
+       .disclaimer-content { max-width: 1200px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+       .disclaimer-icon { font-size: 1.5rem; color: var(--premium-gold); flex-shrink: 0; }
+       .disclaimer-text { flex: 1; line-height: 1.5; }
+       .disclaimer-close { background: none; border: none; color: rgba(255, 255, 255, 0.7); cursor: pointer; font-size: 1.2rem; padding: 5px; display: flex; align-items: center; justify-content: center; border-radius: 50%; transition: all 0.2s; }
+       .disclaimer-close:hover { color: white; background: rgba(255, 255, 255, 0.1); }
+       .disclaimer-highlight { color: var(--premium-gold); font-weight: 600; }
+       .disclaimer-react { /* Specific class for React version if needed */ }
 
-      .disclaimer-banner.hidden {
-          transform: translateY(-100%);
-          opacity: 0;
-          pointer-events: none;
-      }
-
-
-      .disclaimer-content {
-        max-width: 1200px;
-        margin: 0 auto;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 15px;
-      }
-
-      .disclaimer-icon {
-        font-size: 1.5rem;
-        color: var(--premium-gold);
-        flex-shrink: 0;
-      }
-
-      .disclaimer-text {
-        flex: 1;
-        line-height: 1.5;
-      }
-
-      .disclaimer-close {
-        background: none;
-        border: none;
-        color: rgba(255, 255, 255, 0.7);
-        cursor: pointer;
-        font-size: 1.2rem;
-        padding: 5px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        transition: all 0.2s;
-      }
-
-      .disclaimer-close:hover {
-        color: white;
-        background: rgba(255, 255, 255, 0.1);
-      }
-
-      .disclaimer-highlight {
-        color: var(--premium-gold);
-        font-weight: 600;
-      }
 
       /* Adjust padding on content below the disclaimer */
       .app-container, .onboarding-overlay {
-          /* Use CSS variable for dynamic padding */
           padding-top: var(--disclaimer-height);
-          transition: padding-top 0.5s ease-out; /* Smooth transition */
+          transition: padding-top 0.5s ease-out;
       }
 
       /* Error state */
-      .error-container {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: var(--background-color);
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        padding: 0 20px;
-        text-align: center;
-        z-index: 9000;
-      }
+       .error-container { /* Copied from styles.css */
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--background-color); display: flex; flex-direction: column;
+            justify-content: center; align-items: center; padding: 0 20px; text-align: center; z-index: 9000;
+        }
+       .error-title { font-size: 2rem; margin-bottom: 20px; font-family: 'Playfair Display', serif; }
+       .error-message { font-size: 1.1rem; margin-bottom: 30px; max-width: 600px; }
+       .error-details { padding: 15px; background: rgba(255,255,255,0.1); border-radius: 8px; font-family: monospace; text-align: left; overflow: auto; max-width: 100%; margin-top: 20px; }
+       .reload-button { padding: 12px 30px; background: linear-gradient(135deg, #3498db, #9b59b6); color: white; border: none; border-radius: 30px; font-size: 1rem; cursor: pointer; margin-top: 20px; }
 
-      .error-title {
-        font-size: 2rem;
-        margin-bottom: 20px;
-        font-family: 'Playfair Display', serif;
-      }
 
-      .error-message {
-        font-size: 1.1rem;
-        margin-bottom: 30px;
-        max-width: 600px;
-      }
-
-      .error-details {
-        padding: 15px;
-        background: rgba(255,255,255,0.1);
-        border-radius: 8px;
-        font-family: monospace;
-        text-align: left;
-        overflow: auto;
-        max-width: 100%;
-        margin-top: 20px;
-      }
-
-      .reload-button {
-        padding: 12px 30px;
-        background: linear-gradient(135deg, #3498db, #9b59b6);
-        color: white;
-        border: none;
-        border-radius: 30px;
-        font-size: 1rem;
-        cursor: pointer;
-        margin-top: 20px;
-      }
-
-      /* Animations */
-      @keyframes pulse {
-        0% { opacity: 0.6; }
-        50% { opacity: 1; }
-        100% { opacity: 0.6; }
-      }
-
-      @keyframes fade-in {
-        from { opacity: 0; }
-        to { opacity: 1; }
-      }
-
-      /* Additional responsive fixes */
+      /* Responsive fixes for disclaimer */
       @media (max-width: 768px) {
-        :root {
-            /* Adjust disclaimer height variable for mobile */
-            --disclaimer-height: 90px; /* Approximate height on mobile */
-        }
-        .disclaimer-content {
-          flex-direction: column;
-          text-align: center;
-          padding: 5px 0;
-        }
-
-        .disclaimer-banner {
-          padding: 15px;
-        }
-
-        .disclaimer-close {
-          position: absolute;
-          top: 10px;
-          right: 10px;
-        }
-
+        .disclaimer-content { flex-direction: column; text-align: center; padding: 5px 0; }
+        .disclaimer-banner { padding: 15px; }
+        .disclaimer-close { position: absolute; top: 10px; right: 10px; }
+         /* :root { --disclaimer-height: 90px; } /* Let JS handle dynamic height */
       }
-
       @media (max-width: 480px) {
-         :root {
-            /* Adjust disclaimer height variable for small mobile */
-            --disclaimer-height: 110px; /* Approximate height on small mobile */
-         }
-        .loading-text {
-          font-size: 1rem;
-        }
-
-        .disclaimer-banner {
-          padding: 15px 10px 10px 10px;
-          font-size: 0.8rem;
-        }
+         .disclaimer-banner { padding: 15px 10px 10px 10px; font-size: 0.8rem; }
+         /* :root { --disclaimer-height: 110px; } /* Let JS handle dynamic height */
       }
+
+      /* --- Look Around Hint Styles --- */
+      .look-around-hint {
+          position: absolute;
+          top: 45%; /* Adjust vertical position */
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: rgba(15, 15, 30, 0.8);
+          color: #e0e0e0;
+          padding: 18px 25px;
+          border-radius: 15px;
+          border: 1px solid rgba(52, 152, 219, 0.3);
+          box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+          backdrop-filter: blur(10px);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 0.5s ease-in-out;
+          animation: hint-fade-in 0.5s ease-out forwards, hint-float 3s ease-in-out infinite 0.5s;
+      }
+
+      .look-around-hint.visible {
+          opacity: 1;
+          pointer-events: auto; /* Allow interaction if needed, though not typical */
+      }
+
+      .look-around-hint.fading-out {
+          animation: hint-fade-out 0.7s ease-in forwards, hint-float 3s ease-in-out infinite; /* Keep floating while fading */
+          pointer-events: none;
+      }
+
+      .hint-icon {
+          width: 50px;
+          height: 50px;
+          margin-bottom: 15px;
+          position: relative;
+      }
+
+      .hint-mouse {
+          width: 28px;
+          height: 45px;
+          border: 2px solid rgba(255, 255, 255, 0.7);
+          border-radius: 15px;
+          position: absolute;
+          left: 50%;
+          top: 50%;
+          transform: translate(-50%, -50%);
+      }
+
+      .hint-mouse::before { /* Scroll wheel */
+          content: '';
+          position: absolute;
+          top: 8px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 3px;
+          height: 8px;
+          background: rgba(255, 255, 255, 0.5);
+          border-radius: 2px;
+      }
+
+      .hint-drag-arrow {
+          position: absolute;
+          width: 25px;
+          height: 25px;
+          border-left: 2px solid var(--secondary-color);
+          border-bottom: 2px solid var(--secondary-color);
+          transform: rotate(-45deg);
+          animation: hint-drag 1.5s ease-in-out infinite;
+          opacity: 0.8;
+      }
+
+      .hint-text {
+          font-size: 1rem;
+          font-weight: 500;
+          text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+      }
+
+      /* Keyframes for Hint */
+      @keyframes hint-fade-in {
+          from { opacity: 0; transform: translate(-50%, -40%); }
+          to { opacity: 1; transform: translate(-50%, -50%); }
+      }
+
+      @keyframes hint-fade-out {
+          from { opacity: 1; transform: translate(-50%, -50%); }
+          to { opacity: 0; transform: translate(-50%, -60%); }
+      }
+
+      @keyframes hint-float {
+          0%, 100% { transform: translate(-50%, -50%); }
+          50% { transform: translate(-50%, -55%); }
+      }
+
+      @keyframes hint-drag {
+          0% { left: 30%; top: 40%; opacity: 0; }
+          20% { opacity: 0.8; }
+          80% { left: 60%; top: 40%; opacity: 0.8; }
+          100% { opacity: 0; }
+      }
+      /* --- End Look Around Hint Styles --- */
+
     </style>
 
     <!-- Basic noscript message -->
     <noscript>
-      <style> #root { display: none; } </style>
+      <style> #root, #initial-loader, .disclaimer-banner { display: none; } </style>
       <div style="padding: 20px; text-align: center; color: white; font-family: sans-serif;">
         <h2>JavaScript Required</h2>
         <p>This immersive experience requires JavaScript to function. Please enable JavaScript in your browser settings.</p>
@@ -350,7 +284,7 @@
     </noscript>
 </head>
 <body>
-    <!-- Disclaimer Banner -->
+    <!-- Disclaimer Banner (HTML version, controlled by JS) -->
     <div class="disclaimer-banner" id="disclaimer-banner">
         <div class="disclaimer-content">
             <div class="disclaimer-icon">⚠️</div>
@@ -375,32 +309,43 @@
       // Simple error tracking
       window.harmonyErrors = [];
       window.addEventListener('error', function(event) {
-        // Ignore Babel compilation errors that are handled elsewhere
-        if (event.message.includes("Cannot access '")) return;
-
-        window.harmonyErrors.push({
+        if (event.message.includes("Cannot access '")) return; // Ignore common Babel init noise
+        const errorData = {
           message: event.message,
-          source: event.filename,
-          lineno: event.lineno,
-          colno: event.colno,
-          error: event.error
-        });
-        console.error('Caught error:', event);
+          source: event.filename || 'N/A',
+          lineno: event.lineno || 0,
+          colno: event.colno || 0,
+          error: event.error ? event.error.stack || event.error.toString() : 'N/A'
+        };
+        window.harmonyErrors.push(errorData);
+        console.error('Caught Global Error:', errorData);
       });
+      window.addEventListener('unhandledrejection', function(event) {
+          const errorData = {
+            message: 'Unhandled Promise Rejection',
+            reason: event.reason ? event.reason.stack || event.reason.toString() : 'N/A'
+          };
+          window.harmonyErrors.push(errorData);
+          console.error('Caught Unhandled Promise Rejection:', errorData);
+      });
+
 
       // Disclaimer close handler & Auto-hide
       document.addEventListener('DOMContentLoaded', function() {
         const disclaimerClose = document.getElementById('disclaimer-close');
         const disclaimerBanner = document.getElementById('disclaimer-banner');
-        const rootElement = document.getElementById('root'); // Or '.app-container' if it exists early
 
         let hideTimeoutId = null; // Store timeout ID
 
+        function setContentPadding(height) {
+             // Use CSS variable for dynamic padding adjustment
+             document.documentElement.style.setProperty('--disclaimer-height', `${height}px`);
+        }
+
         function hideDisclaimer() {
-            if (disclaimerBanner) {
+            if (disclaimerBanner && !disclaimerBanner.classList.contains('hidden')) {
                 disclaimerBanner.classList.add('hidden');
-                 // Reset padding on content below when disclaimer hides
-                document.documentElement.style.setProperty('--disclaimer-height', '0px');
+                setContentPadding(0); // Reset padding when banner hides
             }
             if (hideTimeoutId) {
                 clearTimeout(hideTimeoutId); // Clear timeout if hidden manually
@@ -414,68 +359,80 @@
           // Auto-hide after 20 seconds
           hideTimeoutId = setTimeout(hideDisclaimer, 20000); // 20 seconds
 
-          // Set initial padding based on banner height
-          // Use requestAnimationFrame to ensure layout is calculated
+          // Set initial padding based on banner height after layout calculation
           requestAnimationFrame(() => {
               if (disclaimerBanner && getComputedStyle(disclaimerBanner).display !== 'none' && !disclaimerBanner.classList.contains('hidden')) {
                   const height = disclaimerBanner.offsetHeight;
-                  // Use CSS variable for dynamic padding adjustment
-                  document.documentElement.style.setProperty('--disclaimer-height', `${height}px`);
+                  setContentPadding(height);
               } else {
-                  document.documentElement.style.setProperty('--disclaimer-height', `0px`);
+                  setContentPadding(0);
               }
           });
         } else {
             // If banner doesn't exist, ensure padding is 0
-            document.documentElement.style.setProperty('--disclaimer-height', `0px`);
+            setContentPadding(0);
         }
       });
 
       // Safety timeout - if app doesn't initialize properly
-      setTimeout(function() {
+      const safetyTimeout1 = setTimeout(function() {
         const loader = document.getElementById('initial-loader');
-        if (loader && loader.style.display !== 'none') {
-          // Update the loading text
+        // Check if loader is still visible AND React hasn't rendered yet
+        if (loader && loader.style.display !== 'none' && !window.reactReady) {
           const loadingText = loader.querySelector('.loading-text');
           if (loadingText) {
-            loadingText.innerHTML = 'Loading is taking longer than expected.<br><br>Please try refreshing the page.';
+            loadingText.innerHTML = 'Loading is taking longer than expected.<br>Checking resources...<br><br>If this persists, please try refreshing.';
           }
+           console.warn("Safety Timeout 1: Loading seems stuck.");
         }
-      }, 15000);  // 15 seconds
+      }, 15000); // 15 seconds
 
       // Final safety - force remove loader after 30 seconds if stuck
-      setTimeout(function() {
+      const safetyTimeout2 = setTimeout(function() {
         const loader = document.getElementById('initial-loader');
-        if (loader && loader.style.display !== 'none') {
+        if (loader && loader.style.display !== 'none' && !window.reactReady) {
+          console.error("Safety Timeout 2: Loading took too long. Forcing loader hide. App might be broken.");
           loader.style.opacity = '0';
-          setTimeout(() => {
-            loader.style.display = 'none';
-          }, 500);
+          setTimeout(() => { loader.style.display = 'none'; }, 500);
+          // Optionally show an error message here too
+          if (typeof window.showErrorScreen === 'function') {
+              window.showErrorScreen('Application failed to load completely. Please refresh.');
+          }
         }
       }, 30000); // 30 seconds
 
+      // Function to clear safety timeouts once app is ready
+      window.clearSafetyTimeouts = function() {
+          clearTimeout(safetyTimeout1);
+          clearTimeout(safetyTimeout2);
+      };
+
       // Show error screen function
       window.showErrorScreen = function(message) {
-        // Hide the loader
+        window.clearSafetyTimeouts(); // Stop safety timeouts if error occurs
         const loader = document.getElementById('initial-loader');
         if (loader) loader.style.display = 'none';
+        if (document.querySelector('.error-container')) return; // Prevent multiple error screens
 
-        // Prevent adding multiple error screens
-        if (document.querySelector('.error-container')) return;
-
-        // Create and show error screen
         const errorContainer = document.createElement('div');
         errorContainer.className = 'error-container';
+        let errorDetailsHtml = '';
+        if (window.harmonyErrors.length > 0) {
+            errorDetailsHtml = `<div class="error-details">${window.harmonyErrors.map(err =>
+                `Msg: ${err.message || 'Unknown'}<br>Src: ${err.source || err.reason || 'N/A'}${err.lineno ? `:${err.lineno}` : ''}<br>---`
+            ).join('<br>')}</div>`;
+        }
+
         errorContainer.innerHTML = `
           <h1 class="error-title">Application Error</h1>
           <p class="error-message">${message}</p>
           <button class="reload-button" onclick="window.location.reload()">Refresh Page</button>
-          ${window.harmonyErrors.length > 0 ?
-          `<div class="error-details">${window.harmonyErrors.map(err =>
-            `${err.message} (${err.source}:${err.lineno}:${err.colno})`
-          ).join('<br>')}</div>` : ''}
+          ${errorDetailsHtml}
         `;
+        // Clear existing body content before adding error screen
+        document.body.innerHTML = '';
         document.body.appendChild(errorContainer);
+        document.body.style.overflow = 'auto'; // Allow scrolling for error details
       };
     </script>
 
@@ -483,27 +440,39 @@
     <script src="https://unpkg.com/react@17/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/three@0.137.0/build/three.min.js"></script>
+    <!-- Load necessary THREE examples -->
     <script src="https://unpkg.com/three@0.137.0/examples/js/shaders/CopyShader.js"></script>
     <script src="https://unpkg.com/three@0.137.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
     <script src="https://unpkg.com/three@0.137.0/examples/js/shaders/FXAAShader.js"></script>
+    <!-- <script src="https://unpkg.com/three@0.137.0/examples/js/shaders/FilmShader.js"></script> --> <!-- Optional -->
     <script src="https://unpkg.com/three@0.137.0/examples/js/postprocessing/EffectComposer.js"></script>
     <script src="https://unpkg.com/three@0.137.0/examples/js/postprocessing/RenderPass.js"></script>
     <script src="https://unpkg.com/three@0.137.0/examples/js/postprocessing/ShaderPass.js"></script>
     <script src="https://unpkg.com/three@0.137.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
     <script src="https://unpkg.com/three@0.137.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <!-- Load Custom Application JavaScript Files -->
     <script>
       // Sequential loading of application scripts with completion tracking
-      let scriptsLoaded = false;
+      let dependenciesLoaded = false; // Track dependency loading specifically
 
-      function loadScript(src) {
+      function loadScript(src, id) {
         return new Promise((resolve, reject) => {
+          if (document.getElementById(id)) {
+            console.log(`Script ${id} already loaded or loading.`);
+            resolve(); // Assume it will load or is loaded
+            return;
+          }
           const script = document.createElement('script');
           script.src = src;
-          script.async = false; // Try loading sequentially
-          script.onload = resolve;
+          script.id = id;
+          script.async = false; // Enforce sequential execution
+          script.onload = () => {
+              console.log(`Script loaded successfully: ${src}`);
+              resolve();
+          };
           script.onerror = (err) => {
               console.error(`Failed to load script: ${src}`, err);
               reject(new Error(`Failed to load script: ${src}`));
@@ -515,37 +484,124 @@
       // Helper to hide initial loader
       function hideInitialLoader() {
         const initialLoader = document.getElementById('initial-loader');
-        if (initialLoader) {
+        if (initialLoader && initialLoader.style.display !== 'none') {
+          console.log("Hiding initial loader.");
           initialLoader.style.opacity = '0';
           setTimeout(() => {
             initialLoader.style.display = 'none';
+            window.clearSafetyTimeouts(); // Clear safety timeouts now
           }, 500);
         }
       }
 
-      // Chain the loading: data.js first, then the rest
-      loadScript("data.js")
+      // --- CORRECTED SCRIPT LOADING ORDER ---
+      console.log("Starting script loading sequence...");
+      loadScript("data.js", "data-script")
+        .then(() => loadScript("ToastSystem.js", "toast-script"))
+        .then(() => loadScript("EmotionAudioList.js", "emotion-audio-list-script"))
+        .then(() => loadScript("EmotionVisualList.js", "emotion-visual-list-script"))
+        // --- Load ALL Audio Engine Modules FIRST ---
+        .then(() => { console.log("Loading Audio Engine Modules..."); return Promise.resolve(); })
+        // Pads & Drones
+        .then(() => loadScript("ae_pads.js", "ae-pads-script")) // *** Load the main AEPads ***
+        .then(() => loadScript("ae_padWarmAnalog.js", "ae-padWarmAnalog-script"))
+        .then(() => loadScript("ae_padSoftString.js", "ae-padSoftString-script"))
+        .then(() => loadScript("ae_padBrightShimmer.js", "ae-padBrightShimmer-script"))
+        .then(() => loadScript("ae_padCosmicDeep.js", "ae-padCosmicDeep-script"))
+        .then(() => loadScript("ae_droneMystical.js", "ae-droneMystical-script"))
+        .then(() => loadScript("ae_padGlassyFM.js", "ae-padGlassyFM-script"))
+        .then(() => loadScript("ae_padFilteredNoise.js", "ae-padFilteredNoise-script"))
+        .then(() => loadScript("ae_padResonant.js", "ae-padResonant-script"))
+        // Melodic
+        .then(() => loadScript("ae_melodySine.js", "ae-melodySine-script"))
+        .then(() => loadScript("ae_melodyPluck.js", "ae-melodyPluck-script"))
+        .then(() => loadScript("ae_melodyBell.js", "ae-melodyBell-script"))
+        .then(() => loadScript("ae_melodyArp.js", "ae-melodyArp-script"))
+        .then(() => loadScript("ae_melodyCrystal.js", "ae-melodyCrystal-script"))
+        .then(() => loadScript("ae_melodyFluteSynth.js", "ae-melodyFluteSynth-script"))
+        .then(() => loadScript("ae_melodySawFiltered.js", "ae-melodySawFiltered-script"))
+        // Bass
+        .then(() => loadScript("ae_bassSubSine.js", "ae-bassSubSine-script"))
+        .then(() => loadScript("ae_bassWarmTriangle.js", "ae-bassWarmTriangle-script"))
+        .then(() => loadScript("ae_bassDroneDeep.js", "ae-bassDroneDeep-script"))
+        .then(() => loadScript("ae_bassResonantFilter.js", "ae-bassResonantFilter-script"))
+        // Percussion
+        .then(() => loadScript("ae_percKickSoft.js", "ae-percKickSoft-script"))
+        .then(() => loadScript("ae_percKickDeep.js", "ae-percKickDeep-script"))
+        .then(() => loadScript("ae_percSnareBrush.js", "ae-percSnareBrush-script"))
+        .then(() => loadScript("ae_percHiHatClosed.js", "ae-percHiHatClosed-script"))
+        .then(() => loadScript("ae_percHiHatOpen.js", "ae-percHiHatOpen-script"))
+        .then(() => loadScript("ae_percShaker.js", "ae-percShaker-script"))
+        .then(() => loadScript("ae_percRimshot.js", "ae-percRimshot-script"))
+        .then(() => loadScript("ae_percTomLow.js", "ae-percTomLow-script"))
+        .then(() => loadScript("ae_percTomMid.js", "ae-percTomMid-script"))
+        .then(() => loadScript("ae_percCymbalSwell.js", "ae-percCymbalSwell-script"))
+        // Ambient Nature - Water
+        .then(() => loadScript("ae_ambientStreamGentle.js", "ae-ambientStreamGentle-script"))
+        .then(() => loadScript("ae_ambientWavesCalm.js", "ae-ambientWavesCalm-script"))
+        .then(() => loadScript("ae_ambientRainLight.js", "ae-ambientRainLight-script"))
+        .then(() => loadScript("ae_ambientRainHeavy.js", "ae-ambientRainHeavy-script"))
+        .then(() => loadScript("ae_ambientRainSurface.js", "ae-ambientRainSurface-script"))
+        .then(() => loadScript("ae_ambientWaterfallDistant.js", "ae-ambientWaterfallDistant-script"))
+        .then(() => loadScript("ae_ambientWaterDrips.js", "ae-ambientWaterDrips-script"))
+        // Ambient Nature - Air/Weather
+        .then(() => loadScript("ae_ambientWindLight.js", "ae-ambientWindLight-script"))
+        .then(() => loadScript("ae_ambientWindHeavy.js", "ae-ambientWindHeavy-script"))
+        .then(() => loadScript("ae_ambientThunderDistant.js", "ae-ambientThunderDistant-script"))
+        .then(() => loadScript("ae_ambientThunderClose.js", "ae-ambientThunderClose-script"))
+        // Ambient Nature - Fire
+        .then(() => loadScript("ae_ambientFireCrackle.js", "ae-ambientFireCrackle-script"))
+        .then(() => loadScript("ae_ambientFireplace.js", "ae-ambientFireplace-script"))
+        // Ambient Nature - Life
+        .then(() => loadScript("ae_ambientBirdsong.js", "ae-ambientBirdsong-script"))
+        .then(() => loadScript("ae_ambientInsectsNight.js", "ae-ambientInsectsNight-script"))
+        // Cosmic & Ethereal
+        .then(() => loadScript("ae_cosmicSpaceDrone.js", "ae-cosmicSpaceDrone-script"))
+        .then(() => loadScript("ae_cosmicPulsar.js", "ae-cosmicPulsar-script"))
+        .then(() => loadScript("ae_cosmicStarlight.js", "ae-cosmicStarlight-script"))
+        // Specific Instruments/Effects
+        .then(() => loadScript("ae_instrumentPianoChord.js", "ae-instrumentPianoChord-script"))
+        .then(() => loadScript("ae_instrumentViolinSwell.js", "ae-instrumentViolinSwell-script"))
+        .then(() => loadScript("ae_effectHeartbeat.js", "ae-effectHeartbeat-script"))
+        // Example Module (if used)
+        .then(() => loadScript("ae_exampleModule.js", "ae-exampleModule-script")) // Example
+        // --- Load AudioEngine AFTER its modules ---
+        .then(() => { console.log("Loading Audio Engine Core..."); return Promise.resolve(); })
+        .then(() => loadScript("AudioEngine.js", "audioengine-script"))
+        // --- Load ALL Visual Canvas Modules ---
+        .then(() => { console.log("Loading Visual Canvas Modules..."); return Promise.resolve(); })
+        .then(() => loadScript("vc_lighting.js", "vclighting-script"))
+        .then(() => loadScript("vc_stars.js", "vcstars-script"))
+        .then(() => loadScript("vc_landscape.js", "vclandscape-script"))
+        .then(() => loadScript("vc_water.js", "vcwater-script"))
+        .then(() => loadScript("vc_celestial.js", "vccelestial-script"))
+        .then(() => loadScript("vc_plants.js", "vcplants-script"))
+        .then(() => loadScript("vc_particles.js", "vcparticles-script"))
+        .then(() => loadScript("vc_clouds.js", "vcclouds-script"))
+        .then(() => loadScript("vc_dreamEffects.js", "vcdreameffects-script"))
+        // --- Load VisualCanvas AFTER its modules ---
+        .then(() => { console.log("Loading Visual Canvas Core..."); return Promise.resolve(); })
+        .then(() => loadScript("VisualCanvas.js", "visualcanvas-script"))
+        // --- Load Connector and Exporter ---
+        .then(() => { console.log("Loading Connector and Exporter..."); return Promise.resolve(); })
+        .then(() => loadScript("AudioVisualConnector.js", "audiovisualconnector-script"))
+        .then(() => loadScript("VideoExporter.js", "videoexporter-script"))
+        // --- Dependencies Loaded ---
         .then(() => {
-          console.log("data.js loaded.");
-          // Now load other dependencies that might rely on data.js
-          return Promise.all([
-            loadScript("ToastSystem.js"),
-            loadScript("AudioEngine.js"),
-            loadScript("VisualCanvas.js"),
-            loadScript("VideoExporter.js")
-          ]);
-        })
-        .then(() => {
-          console.log("All dependencies loaded successfully");
-          scriptsLoaded = true;
-          // Remove loader only when scripts are loaded and React is ready
+          console.log("All dependencies loaded successfully.");
+          dependenciesLoaded = true; // Mark dependencies as loaded
+          // Remove loader only when scripts are loaded AND React is ready
           if (window.reactReady) {
             hideInitialLoader();
           }
         })
         .catch(error => {
           console.error("Error loading dependencies:", error);
-          window.showErrorScreen("Could not load application dependencies. Please check your connection and refresh the page.");
+          if (typeof window.showErrorScreen === 'function') {
+            window.showErrorScreen(`Could not load application dependencies (${error.message}). Please check your connection and refresh the page.`);
+          } else {
+            document.body.innerHTML = `<div style='color:white; padding: 20px;'>Failed to load scripts. Please refresh. Error: ${error.message}</div>`;
+          }
         });
 
     </script>
@@ -555,116 +611,84 @@
 
     <!-- React Initialization Script (using Babel) -->
     <script type="text/babel">
-
-      // Toast Component with Enhanced Styling
+      // --- Toast Components ---
       const Toast = ({ type, message, removing, onClose }) => {
-        const icons = {
-          success: '✓',
-          warning: '⚠',
-          error: '✕',
-          info: 'ℹ'
-        };
-
+        const icons = { success: '✓', warning: '⚠', error: '✕', info: 'ℹ' };
+        // Use a default icon if type is unknown (though ToastSystem defaults to 'info')
+        const icon = icons[type] || icons['info'];
         return (
           <div className={`toast toast-${type} ${removing ? 'removing' : ''}`}>
-            <div className="toast-icon">{icons[type]}</div>
+            <div className="toast-icon">{icon}</div>
             <div className="toast-message">{message}</div>
+            {/* Optional: Add a close button */}
+            {/* <button onClick={onClose} className="toast-close-btn">×</button> */}
           </div>
         );
       };
 
-      // ToastContainer Component
       const ToastContainer = () => {
         const [toasts, setToasts] = React.useState([]);
-
         React.useEffect(() => {
-          if (typeof ToastSystem !== 'undefined') {
-            try {
-              const unsubscribe = ToastSystem.subscribe(setToasts);
-              return unsubscribe;
-            } catch (error) {
-              console.error("Toast system subscription error:", error);
-              return () => {};
-            }
+          let unsubscribe = null;
+          if (typeof ToastSystem !== 'undefined' && ToastSystem.subscribe) {
+            unsubscribe = ToastSystem.subscribe(setToasts);
           } else {
-              console.warn("ToastSystem not available on mount. Retrying subscription shortly...");
-              let unsubscribe = null;
-              const timeoutId = setTimeout(() => {
-                  if (typeof ToastSystem !== 'undefined') {
-                     console.log("Retrying ToastSystem subscription...");
-                     try {
-                        unsubscribe = ToastSystem.subscribe(setToasts);
-                     } catch (error) {
-                        console.error("Toast system retry subscription error:", error);
-                     }
-                  } else {
-                      console.error("ToastSystem still not available after delay.");
-                  }
-              }, 500);
-
-              return () => {
-                  clearTimeout(timeoutId);
-                  if (unsubscribe) unsubscribe();
-              };
+            console.warn("ToastSystem not ready for subscription on mount.");
+            // Retry mechanism could be added here if needed
           }
-        }, []);
+          return () => {
+              if (unsubscribe) {
+                  unsubscribe();
+              }
+          };
+        }, []); // Empty dependency array ensures this runs only once on mount
+
+        const handleClose = (id) => {
+             if (typeof ToastSystem !== 'undefined' && ToastSystem.removeToast) {
+                  ToastSystem.removeToast(id);
+             } else {
+                  console.warn("ToastSystem not available for removeToast.");
+             }
+        };
 
         return (
           <div className="toast-container">
             {toasts.map(toast => (
-              <Toast
-                key={toast.id}
-                type={toast.type}
-                message={toast.message}
-                removing={toast.removing}
-                onClose={() => {
-                    if (typeof ToastSystem !== 'undefined') {
-                        ToastSystem.removeToast(toast.id)
-                    }
-                }}
-              />
+              <Toast key={toast.id} {...toast} onClose={() => handleClose(toast.id)} />
             ))}
           </div>
         );
       };
 
-      // Enhanced Disclaimer Banner Component for React (with auto-hide)
+      // --- Disclaimer Banner (React Version) ---
       const DisclaimerBanner = () => {
         const [visible, setVisible] = React.useState(true);
-        const bannerRef = React.useRef(null); // Ref to get height
+        const bannerRef = React.useRef(null);
 
         const closeDisclaimer = React.useCallback(() => {
           setVisible(false);
-          // Reset padding when banner hides
+          // Ensure padding is reset when React hides the banner
           document.documentElement.style.setProperty('--disclaimer-height', '0px');
         }, []);
 
         React.useEffect(() => {
-            let timeoutId = null;
-            if (visible) {
-                // Auto-hide after 20 seconds
-                timeoutId = setTimeout(closeDisclaimer, 20000);
+          let timeoutId = null;
+          if (visible) {
+            timeoutId = setTimeout(closeDisclaimer, 20000); // Auto-hide
+            // Set padding after render ensures correct height calculation
+            requestAnimationFrame(() => {
+              if (bannerRef.current) {
+                const height = bannerRef.current.offsetHeight;
+                document.documentElement.style.setProperty('--disclaimer-height', `${height}px`);
+              }
+            });
+          } else {
+               // Explicitly set padding to 0 if banner is not visible initially or gets hidden
+               document.documentElement.style.setProperty('--disclaimer-height', '0px');
+          }
+          return () => clearTimeout(timeoutId);
+        }, [visible, closeDisclaimer]);
 
-                // Set padding based on height after render
-                requestAnimationFrame(() => {
-                    if (bannerRef.current) {
-                        const height = bannerRef.current.offsetHeight;
-                        document.documentElement.style.setProperty('--disclaimer-height', `${height}px`);
-                    }
-                });
-            }
-
-            // Cleanup function
-            return () => {
-                clearTimeout(timeoutId);
-                // Ensure padding is reset if component unmounts while visible
-                if (visible) {
-                     document.documentElement.style.setProperty('--disclaimer-height', '0px');
-                }
-            };
-        }, [visible, closeDisclaimer]); // Rerun effect if visibility changes
-
-        // Don't render if not visible
         if (!visible) return null;
 
         return (
@@ -680,83 +704,90 @@
         );
       };
 
+      // --- Onboarding Component ---
+       const Onboarding = ({ moodDescriptions, onEnter }) => {
+            const [timerValue, setTimerValue] = React.useState(30); // Default timer duration
+            const [timerRunning, setTimerRunning] = React.useState(true);
+            const [currentTime, setCurrentTime] = React.useState(timerValue); // Initialize with timerValue
+            const timerIntervalRef = React.useRef(null);
 
-      // Onboarding Component - Receives moodDescriptions as prop
-      const Onboarding = ({ moodDescriptions, onEnter }) => {
-        const [timerValue, setTimerValue] = React.useState(30);
-        const [timerRunning, setTimerRunning] = React.useState(true);
-        const [currentTime, setCurrentTime] = React.useState(30);
-        const timerIntervalRef = React.useRef(null);
+            React.useEffect(() => {
+                if (timerRunning && currentTime > 0) {
+                    timerIntervalRef.current = setInterval(() => {
+                        setCurrentTime(prev => Math.max(0, prev - 1)); // Prevent going below 0
+                    }, 1000);
+                } else if (currentTime === 0 && timerRunning) { // Only trigger onEnter if timer was running and reached 0
+                    clearInterval(timerIntervalRef.current); // Stop interval first
+                    onEnter();
+                }
+                // Cleanup interval on unmount or when timer stops/resets
+                return () => clearInterval(timerIntervalRef.current);
+            }, [timerRunning, currentTime, onEnter]); // Dependencies
 
-        React.useEffect(() => {
-          if (timerRunning && currentTime > 0) {
-            timerIntervalRef.current = setInterval(() => {
-              setCurrentTime(prev => prev - 1);
-            }, 1000);
-          } else if (currentTime === 0) {
-            onEnter();
-          }
-          return () => clearInterval(timerIntervalRef.current);
-        }, [timerRunning, currentTime, onEnter]);
+            const handleTimerChange = (e) => {
+                const value = parseInt(e.target.value, 10);
+                if (!isNaN(value) && value >= 5 && value <= 300) { // Example range 5s to 5min
+                    setTimerValue(value);
+                    setCurrentTime(value); // Reset current time when value changes
+                    if (!timerRunning) setTimerRunning(true); // Optionally restart timer on change
+                }
+            };
+            const toggleTimer = () => setTimerRunning(prev => !prev);
+            const resetTimer = () => {
+                clearInterval(timerIntervalRef.current); // Clear existing interval
+                setCurrentTime(timerValue);
+                if (!timerRunning) setTimerRunning(true); // Ensure timer starts if paused
+            };
+            const formatTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+            // Use safe access to global data loaded earlier
+            const descriptions = (typeof moodDescriptions !== 'undefined' && moodDescriptions) ? moodDescriptions : {};
+            const descriptionsAvailable = Object.keys(descriptions).length > 0;
 
-        const handleTimerChange = (e) => {
-          const value = parseInt(e.target.value, 10);
-          setTimerValue(value);
-          setCurrentTime(value);
-        };
-        const toggleTimer = () => setTimerRunning(!timerRunning);
-        const resetTimer = () => {
-          setCurrentTime(timerValue);
-          if (!timerRunning) setTimerRunning(true);
-        };
-        const formatTime = (seconds) => `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
-
-        // Check if moodDescriptions is valid before mapping
-        const descriptionsAvailable = moodDescriptions && typeof moodDescriptions === 'object' && Object.keys(moodDescriptions).length > 0;
-
-        return (
-          <div className="onboarding-overlay">
-            <div className="onboarding-container">
-              <div className="onboarding-card premium-card">
-                <div className="premium-badge">Premium Experience</div>
-                <h1 className="onboarding-logo">Harmonic Visions</h1>
-                <div className="onboarding-subheading">An immersive audiovisual journey</div>
-                <p className="onboarding-description">
-                  Experience a mesmerizing fusion of evolving landscapes, harmonious sounds, and responsive visuals
-                  designed to create a deeply immersive and transcendent experience. Each mood offers a unique
-                  journey that resonates with different emotional states.
-                </p>
-                <div className="creator-attribution">
-                  FatStinkyPanda's Transcendence Experience - Unlock your mind and connect with the universe
-                </div>
-                <div className="onboarding-timer premium-timer">
-                  <div className="timer-display">{formatTime(currentTime)}</div>
-                  <div className="timer-controls">
-                    <button className="timer-button" onClick={toggleTimer}>{timerRunning ? 'Pause' : 'Resume'}</button>
-                    <button className="timer-button" onClick={resetTimer}>Reset</button>
-                  </div>
-                  <div className="timer-progress"><div className="timer-progress-fill" style={{ width: `${(currentTime / timerValue) * 100}%` }}></div></div>
-                  <div className="timer-message">Your transcending experience will begin automatically when the timer ends. You can also start your journey anytime by selecting "Begin Journey" below.</div>
-                </div>
-                <div className="experience-cards">
-                  {descriptionsAvailable ? Object.entries(moodDescriptions).map(([mood, description]) => (
-                    <div className={`experience-card experience-card-${mood}`} key={mood}>
-                      <div className="card-glow"></div>
-                      <h3>{mood.charAt(0).toUpperCase() + mood.slice(1)}</h3>
-                      <p>{description}</p>
+            return (
+                <div className="onboarding-overlay">
+                    <div className="onboarding-container">
+                        <div className="onboarding-card premium-card">
+                            <div className="premium-badge">Premium Experience</div>
+                            <h1 className="onboarding-logo">Harmonic Visions</h1>
+                            <div className="onboarding-subheading">An immersive audiovisual journey</div>
+                            <p className="onboarding-description">
+                                Experience a mesmerizing fusion of evolving landscapes, harmonious sounds, and responsive visuals
+                                designed to create a deeply immersive and transcendent experience. Each mood offers a unique
+                                journey that resonates with different emotional states.
+                            </p>
+                            <div className="creator-attribution">
+                                FatStinkyPanda's Transcendence Experience - Unlock your mind and connect with the universe
+                            </div>
+                            <div className="onboarding-timer premium-timer">
+                                <div className="timer-display">{formatTime(currentTime)}</div>
+                                <div className="timer-controls">
+                                    <button className="timer-button" onClick={toggleTimer}>{timerRunning ? 'Pause' : 'Resume'}</button>
+                                    <button className="timer-button" onClick={resetTimer}>Reset</button>
+                                    {/* Optional: Input to change timer duration */}
+                                    {/* <input type="number" min="5" max="300" value={timerValue} onChange={handleTimerChange} style={{width: '60px', marginLeft: '10px'}}/> */}
+                                </div>
+                                <div className="timer-progress"><div className="timer-progress-fill" style={{ width: `${(currentTime / timerValue) * 100}%` }}></div></div>
+                                <div className="timer-message">Your transcending experience will begin automatically...</div>
+                            </div>
+                            <div className="experience-cards">
+                                {descriptionsAvailable ? Object.entries(descriptions).map(([mood, description]) => (
+                                    <div className={`experience-card experience-card-${mood}`} key={mood}>
+                                        <div className="card-glow"></div>
+                                        <h3>{mood.charAt(0).toUpperCase() + mood.slice(1)}</h3>
+                                        <p>{description}</p>
+                                    </div>
+                                )) : <p>Loading mood descriptions...</p>}
+                            </div>
+                            <div className="support-message"><p>If you enjoy this experience and find it valuable, your support helps me continue creating more immersive journeys. Thanks for being part of this adventure!</p></div>
+                            <button className="enter-button premium-button" onClick={onEnter}><span className="button-text">Begin Journey</span><span className="button-icon">→</span></button>
+                        </div>
                     </div>
-                  )) : <p>Loading mood descriptions...</p>}
                 </div>
-                <div className="support-message"><p>If you enjoy this experience and find it valuable, your support helps me continue creating more immersive journeys. Thanks for being part of this adventure!</p></div>
-                <button className="enter-button premium-button" onClick={onEnter}><span className="button-text">Begin Journey</span><span className="button-icon">→</span></button>
-              </div>
-            </div>
-          </div>
-        );
-      };
+            );
+        };
 
 
-      // Enhanced LoadingIndicator Component
+      // --- Loading Indicator Component ---
       const LoadingIndicator = () => {
         return (
           <div className="loading-indicator premium-loading">
@@ -770,250 +801,304 @@
         );
       };
 
-      // Main App Component with Enhanced Features
+      // --- Look Around Hint Component ---
+      const LookAroundHint = ({ isVisible, onComplete }) => {
+          const [isFadingOut, setIsFadingOut] = React.useState(false);
+          const timeoutRef = React.useRef(null);
+
+          React.useEffect(() => {
+              if (isVisible) {
+                  // Clear any existing timeouts
+                  if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
+                  // Start fade-out after a delay (e.g., 3 seconds)
+                  timeoutRef.current = setTimeout(() => {
+                      setIsFadingOut(true);
+                      // Call onComplete after the fade-out animation finishes
+                      setTimeout(() => {
+                          onComplete(); // Notify parent that the hint cycle is done
+                      }, 700); // Matches fade-out duration in CSS
+                  }, 3000); // Display duration before fading
+              }
+
+              // Cleanup timeout on unmount or if isVisible becomes false early
+              return () => clearTimeout(timeoutRef.current);
+          }, [isVisible, onComplete]);
+
+          // Don't render anything if not visible and not fading out
+          if (!isVisible && !isFadingOut) {
+              return null;
+          }
+
+          return (
+              <div className={`look-around-hint ${isVisible ? 'visible' : ''} ${isFadingOut ? 'fading-out' : ''}`}>
+                  <div className="hint-icon">
+                      <div className="hint-mouse"></div>
+                      <div className="hint-drag-arrow"></div>
+                  </div>
+                  <div className="hint-text">Click & Drag to Look Around</div>
+              </div>
+          );
+      };
+
+      // --- Main App Component (Refactored Initialization) ---
       function App() {
-        // State variables for the application
         const [isPlaying, setIsPlaying] = React.useState(false);
         const [volume, setVolume] = React.useState(0.7);
         const [currentMood, setCurrentMood] = React.useState('calm');
         const [showExportPanel, setShowExportPanel] = React.useState(false);
         const [isExporting, setIsExporting] = React.useState(false);
         const [exportProgress, setExportProgress] = React.useState(0);
-        const [exportDuration, setExportDuration] = React.useState(15); // 15 seconds default for testing
+        const [exportDuration, setExportDuration] = React.useState(15); // Default 15s
         const [exportQuality, setExportQuality] = React.useState('high');
-        const [exportFormat, setExportFormat] = React.useState('mp4'); // Default format
+        const [exportFormat, setExportFormat] = React.useState('webm'); // Default webm
         const [showOnboarding, setShowOnboarding] = React.useState(true);
         const [isLoading, setIsLoading] = React.useState(false);
-        const [uiVisible, setUiVisible] = React.useState(true); // Track UI visibility
+        const [uiVisible, setUiVisible] = React.useState(true);
         const [showDisclaimerInApp, setShowDisclaimerInApp] = React.useState(false);
         const [experienceInitialized, setExperienceInitialized] = React.useState(false);
+        // State for the look around hint
+        const [showLookAroundHint, setShowLookAroundHint] = React.useState(false);
+        const hintShownRef = React.useRef(false); // Track if hint has been shown this session
 
-        // References
+        // Refs
         const canvasRef = React.useRef(null);
         const audioEngineRef = React.useRef(null);
-        const visualCanvasInstanceRef = React.useRef(null); // Ref for the VisualCanvas class instance
+        const visualCanvasRef = React.useRef(null);
+        const audioConnectorRef = React.useRef(null);
         const videoExporterRef = React.useRef(null);
         const exportTimerRef = React.useRef(null);
-        const uiVisibilityTimeoutRef = React.useRef(null); // Ref for the UI hide timeout
+        const uiVisibilityTimeoutRef = React.useRef(null);
 
         // Access global data safely
-        const availableMoods = typeof moods !== 'undefined' ? moods : [];
-        const availableMoodDescriptions = typeof moodDescriptions !== 'undefined' ? moodDescriptions : {};
-        const availableQualityOptions = typeof qualityOptions !== 'undefined' ? qualityOptions : [];
-        const availableFormatOptions = typeof formatOptions !== 'undefined' ? formatOptions : [];
+        const availableMoods = (typeof moods !== 'undefined' && Array.isArray(moods)) ? moods : [{ id: 'calm', label: 'Calm' }];
+        const availableMoodDescriptions = (typeof moodDescriptions !== 'undefined' && moodDescriptions) ? moodDescriptions : { calm: "Default calm description." };
+        const availableQualityOptions = (typeof qualityOptions !== 'undefined' && Array.isArray(qualityOptions)) ? qualityOptions : [{ id: 'high', label: 'High' }];
+        const availableFormatOptions = (typeof formatOptions !== 'undefined' && Array.isArray(formatOptions)) ? formatOptions : [{ id: 'webm', label: 'WebM' }];
 
-
-        // Effect to handle initial loading state - hide the loader when React app is ready
+        // Effect for initial loading state
         React.useEffect(() => {
           console.log("React app mounted");
           window.reactReady = true;
-
-          // Only hide the loader if scripts are loaded as well
-          if (window.scriptsLoaded && typeof window.hideInitialLoader === 'function') {
-            window.hideInitialLoader();
+          if (window.dependenciesLoaded && typeof window.hideInitialLoader === 'function') {
+            hideInitialLoader();
           }
-
           return () => {
-            window.reactReady = false;
+              console.log("React App unmounting - disposing resources...");
+              window.reactReady = false;
+              audioEngineRef.current?.dispose();
+              visualCanvasRef.current?.dispose();
+              audioEngineRef.current = null;
+              visualCanvasRef.current = null;
+              audioConnectorRef.current = null;
+              videoExporterRef.current = null;
           };
         }, []);
 
-        // Function to get audio data - passed to VisualCanvas
-        const getAudioData = React.useCallback(() => {
-          if (audioEngineRef.current && audioEngineRef.current.getAudioData && typeof audioEngineRef.current.getAudioData === 'function') {
-            try {
-              return audioEngineRef.current.getAudioData();
-            } catch (error) {
-              console.error("Error getting audio data:", error);
-              return null;
-            }
-          }
-          return null;
-        }, []); // Stable function reference
-
-        // Handle HTML disclaimer closing to show React one later
+        // Handle HTML disclaimer sync
         React.useEffect(() => {
-          // When onboarding is dismissed AND experience is initialized, show React disclaimer
-          if (!showOnboarding && experienceInitialized) {
-             // Ensure HTML disclaimer is hidden
+             if (!showOnboarding && experienceInitialized) {
+                 const htmlDisclaimer = document.getElementById('disclaimer-banner');
+                 if (htmlDisclaimer && !htmlDisclaimer.classList.contains('hidden')) {
+                     htmlDisclaimer.classList.add('hidden');
+                     document.documentElement.style.setProperty('--disclaimer-height', '0px');
+                 }
+                 setShowDisclaimerInApp(true);
+             } else {
+                 setShowDisclaimerInApp(false);
+             }
+         }, [showOnboarding, experienceInitialized]);
+
+        // --- Initialize the experience ---
+        const initializeExperience = React.useCallback(() => {
+            if (experienceInitialized) return;
+            console.log("App: Initializing experience...");
+            setIsLoading(true);
+
+            let errorOccurred = false;
+            const checkDependency = (depName, depVar) => { /* ... (keep dependency check logic) ... */ };
+             // Add checks for all dependencies...
+             checkDependency('AudioEngine', window.AudioEngine);
+             checkDependency('AudioVisualConnector', window.AudioVisualConnector);
+             checkDependency('VisualCanvas', window.VisualCanvas);
+             checkDependency('VideoExporter', window.VideoExporter);
+             checkDependency('EmotionAudioModules', window.EmotionAudioModules);
+             checkDependency('EmotionVisualModules', window.EmotionVisualModules);
+             checkDependency('AEPads', window.AEPads);
+             checkDependency('VCLighting', window.VCLighting);
+
+
+            if (!canvasRef.current) {
+                 console.error("App: Canvas ref not available.");
+                 if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Initialization Error: Canvas not ready.');
+                 errorOccurred = true;
+            }
+            if (errorOccurred) {
+                 setIsLoading(false);
+                 if (typeof window.showErrorScreen === 'function') {
+                      window.showErrorScreen('Core application files failed to load. Please check the console and refresh.');
+                 }
+                 return;
+             }
+
+            try {
+                // 1. Init AudioEngine (Start paused)
+                audioEngineRef.current = new AudioEngine(false, volume, currentMood);
+                console.log("App: AudioEngine initialized.");
+
+                // 2. Init Connector and link AudioEngine
+                if (typeof AudioVisualConnector.getInstance !== 'function') throw new Error("AudioVisualConnector is not ready.");
+                audioConnectorRef.current = AudioVisualConnector.getInstance();
+                audioConnectorRef.current.setAudioEngine(audioEngineRef.current);
+                audioConnectorRef.current.setMood(currentMood);
+                console.log("App: AudioVisualConnector initialized and linked.");
+
+                // 3. Init VisualCanvas
+                visualCanvasRef.current = new VisualCanvas(canvasRef.current, currentMood);
+                console.log("App: VisualCanvas initialized.");
+
+                // 4. Init VideoExporter
+                 if (audioEngineRef.current?.audioContext && audioEngineRef.current?.masterAnalyser) {
+                     videoExporterRef.current = new VideoExporter(
+                         canvasRef.current,
+                         audioEngineRef.current.audioContext,
+                         audioEngineRef.current.masterAnalyser
+                     );
+                     console.log("App: VideoExporter initialized.");
+                 } else {
+                     console.warn("App: VideoExporter could not be initialized.");
+                     if (typeof ToastSystem !== 'undefined') ToastSystem.notify('warning', 'Video Exporter init failed.');
+                 }
+
+                setExperienceInitialized(true);
+
+                // --- Start Playback Attempt ---
+                setTimeout(() => {
+                    setIsLoading(false);
+                    const tryStartPlaying = async () => {
+                        if (!audioEngineRef.current) return;
+                        if (audioEngineRef.current.audioContext?.state === 'suspended') {
+                             console.log("App: Attempting to resume suspended AudioContext...");
+                             try {
+                                 await audioEngineRef.current.audioContext.resume();
+                                 console.log("App: AudioContext resumed by initialization.");
+                                 setIsPlaying(true); // Trigger play via useEffect
+                             } catch(e) {
+                                 console.error("App: Error resuming audio context:", e);
+                                 if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Could not start audio automatically. Click Play.');
+                             }
+                        } else if (audioEngineRef.current.audioContext?.state === 'running') {
+                             setIsPlaying(true); // Trigger play via useEffect
+                        } else {
+                             console.warn("App: AudioContext not ready for auto-play:", audioEngineRef.current.audioContext?.state);
+                        }
+                    };
+                    tryStartPlaying();
+                }, 1500);
+
+            } catch (error) {
+                console.error("App: CRITICAL Error during experience initialization:", error);
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Initialization failed: ${error.message}. Please refresh.`);
+                setIsLoading(false);
+                setExperienceInitialized(false);
+                audioEngineRef.current?.dispose();
+                visualCanvasRef.current?.dispose();
+                audioEngineRef.current = null;
+                visualCanvasRef.current = null;
+                audioConnectorRef.current = null;
+                videoExporterRef.current = null;
+                 if (typeof window.showErrorScreen === 'function') {
+                      window.showErrorScreen(`Initialization failed (${error.message}). Please refresh.`);
+                 }
+            }
+        }, [experienceInitialized, volume, currentMood]); // Dependencies
+
+        // --- Effects to Update Instances ---
+        React.useEffect(() => { // Update AudioEngine & Connector
+            if (!experienceInitialized || !audioEngineRef.current) return;
+            try {
+                audioEngineRef.current.setPlaying(isPlaying, currentMood);
+                if (audioEngineRef.current.volume !== volume) {
+                    audioEngineRef.current.setVolume(volume);
+                }
+                // Trigger Look Around Hint
+                if (isPlaying && !hintShownRef.current) {
+                    setShowLookAroundHint(true);
+                    hintShownRef.current = true; // Mark as shown
+                }
+            } catch(e) { console.error("App: Error updating AudioEngine state:", e); }
+            if (audioConnectorRef.current) {
+                 try { audioConnectorRef.current.setMood(currentMood); } catch(e) { console.error("App: Error updating Connector mood:", e); }
+            }
+        }, [isPlaying, currentMood, volume, experienceInitialized]); // Dependencies
+
+        React.useEffect(() => { // Update VisualCanvas
+             if (!experienceInitialized || !visualCanvasRef.current) return;
+             try {
+                 if (visualCanvasRef.current.currentMood !== currentMood) {
+                     visualCanvasRef.current.changeMood(currentMood);
+                 }
+                 visualCanvasRef.current.animate(isPlaying);
+             } catch(e) { console.error("App: Error updating VisualCanvas state:", e); }
+        }, [isPlaying, currentMood, experienceInitialized]); // Dependencies
+
+        // --- Event Handlers ---
+        const handleEnterExperience = () => {
             const htmlDisclaimer = document.getElementById('disclaimer-banner');
             if (htmlDisclaimer && !htmlDisclaimer.classList.contains('hidden')) {
                  htmlDisclaimer.classList.add('hidden');
                  document.documentElement.style.setProperty('--disclaimer-height', '0px');
             }
-            // Show the React disclaimer
-            setShowDisclaimerInApp(true);
-          }
-        }, [showOnboarding, experienceInitialized]);
-
-        // Initialize the AudioEngine and VisualCanvas ONLY after user clicks Begin Journey
-        const initializeExperience = React.useCallback(() => {
-          if (experienceInitialized) return;
-
-          console.log("Initializing experience...");
-          setIsLoading(true);
-
-          // Ensure data is loaded before initializing
-          if (typeof moodAudioSettings === 'undefined' || typeof moodSettings === 'undefined') {
-              console.error("Data not loaded yet, cannot initialize experience.");
-              if (typeof ToastSystem !== 'undefined') {
-                  ToastSystem.notify('error', 'Initialization failed: Data not ready. Please refresh.');
-              }
-              setIsLoading(false);
-              return;
-          }
-
-          // Initialize AudioEngine
-          try {
-            audioEngineRef.current = new AudioEngine(false, volume, currentMood);
-            console.log("AudioEngine initialized successfully");
-
-            // Once AudioEngine is ready, initialize VisualCanvas
-            if (canvasRef.current) {
-              visualCanvasInstanceRef.current = new VisualCanvas(
-                canvasRef.current,
-                currentMood,
-                getAudioData // Pass the memoized getter function
-              );
-              console.log("VisualCanvas initialized successfully");
-            }
-
-            // Initialize VideoExporter
-            if (canvasRef.current && audioEngineRef.current?.audioContext && audioEngineRef.current?.analyser) {
-              videoExporterRef.current = new VideoExporter(
-                canvasRef.current,
-                audioEngineRef.current.audioContext,
-                audioEngineRef.current.analyser
-              );
-              console.log("VideoExporter initialized successfully");
-            }
-
-            setExperienceInitialized(true);
-
-            // Start playing audio after a short delay
-            setTimeout(() => {
-              setIsLoading(false);
-
-              if (audioEngineRef.current?.audioContext?.state === 'suspended') {
-                audioEngineRef.current.audioContext.resume().then(() => {
-                  setIsPlaying(true);
-                }).catch(e => {
-                  console.error("Error resuming audio context:", e);
-                  if (typeof ToastSystem !== 'undefined') {
-                      ToastSystem.notify('error', 'Could not start audio. Please click/tap again.');
-                  }
-                });
-              } else {
-                setIsPlaying(true);
-              }
-            }, 1500);
-
-          } catch (error) {
-            console.error("Error initializing experience:", error);
-             if (typeof ToastSystem !== 'undefined') {
-                 ToastSystem.notify('error', 'Could not initialize the experience. Please refresh the page.');
-             }
-            setIsLoading(false);
-          }
-        }, [volume, currentMood, getAudioData, experienceInitialized]); // Include dependencies
-
-        // === Effects for Updating Class Instances ===
-
-        // Effect to update AudioEngine when relevant state changes
-        React.useEffect(() => {
-          if (audioEngineRef.current && experienceInitialized) {
-            try {
-              audioEngineRef.current.setPlaying(isPlaying, currentMood);
-              if (audioEngineRef.current.volume !== volume) {
-                audioEngineRef.current.setVolume(volume);
-              }
-            } catch (error) {
-              console.error("Error updating AudioEngine:", error);
-            }
-          }
-        }, [isPlaying, currentMood, volume, experienceInitialized]);
-
-        // Effect to update VisualCanvas when relevant state changes
-        React.useEffect(() => {
-          if (visualCanvasInstanceRef.current && experienceInitialized) {
-            try {
-              if (visualCanvasInstanceRef.current.mood !== currentMood &&
-                  typeof visualCanvasInstanceRef.current.changeMood === 'function') {
-                visualCanvasInstanceRef.current.changeMood(currentMood);
-              }
-              if (typeof visualCanvasInstanceRef.current.animate === 'function') {
-                  visualCanvasInstanceRef.current.animate(isPlaying);
-              }
-              visualCanvasInstanceRef.current.audioData = getAudioData;
-            } catch (error) {
-              console.error("Error updating VisualCanvas:", error);
-            }
-          }
-        }, [isPlaying, currentMood, getAudioData, experienceInitialized]);
-
-
-        // Handle play/pause - only available after initialization
-        const togglePlayback = React.useCallback(() => {
-          if (!experienceInitialized) return;
-          try {
-            const newState = !isPlaying;
-            if (newState && audioEngineRef.current?.audioContext?.state === 'suspended') {
-              audioEngineRef.current.audioContext.resume().then(() => {
-                setIsPlaying(newState);
-              }).catch(e => {
-                console.error("Error resuming audio context:", e);
-                 if (typeof ToastSystem !== 'undefined') {
-                    ToastSystem.notify('error', 'Could not start audio. Please click/tap again.');
-                 }
-              });
-            } else {
-              setIsPlaying(newState);
-            }
-          } catch (error) {
-            console.error("Error toggling playback:", error);
-             if (typeof ToastSystem !== 'undefined') {
-                 ToastSystem.notify('error', 'Error changing playback state.');
-             }
-          }
-        }, [experienceInitialized, isPlaying]);
-
-        // Handle volume change
-        const handleVolumeChange = (e) => {
-          try {
-            const newVolume = parseFloat(e.target.value);
-            setVolume(newVolume);
-          } catch (error) {
-            console.error("Error changing volume:", error);
-          }
+            setShowOnboarding(false);
+            setTimeout(initializeExperience, 50);
         };
 
-        // Handle mood change
-        const handleMoodChange = React.useCallback((mood) => {
-          try {
-            if (mood !== currentMood) {
-              setCurrentMood(mood);
-              if (typeof ToastSystem !== 'undefined') {
-                 ToastSystem.notify('info', `Mood changed to ${mood.charAt(0).toUpperCase() + mood.slice(1)}`);
-              }
-            }
-          } catch (error) {
-            console.error("Error changing mood:", error);
-            if (typeof ToastSystem !== 'undefined') {
-                ToastSystem.notify('error', 'Error changing mood.');
-            }
-          }
-        }, [currentMood]);
+        const togglePlayback = React.useCallback(() => {
+             if (!experienceInitialized || !audioEngineRef.current) {
+                  console.warn("App: Cannot toggle playback, experience not initialized.");
+                  if (typeof ToastSystem !== 'undefined') ToastSystem.notify('warning', 'Experience not ready yet.');
+                  return;
+             }
+             const nextIsPlaying = !isPlaying;
+             if (nextIsPlaying && audioEngineRef.current.audioContext?.state === 'suspended') {
+                 console.log("App: Attempting to resume AudioContext on play toggle...");
+                 audioEngineRef.current.audioContext.resume()
+                    .then(() => {
+                         console.log("App: AudioContext resumed by toggle.");
+                         setIsPlaying(true);
+                    })
+                    .catch(e => {
+                         console.error("App: Error resuming audio context on toggle:", e);
+                         if(typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Audio failed to start. Click/Tap again.');
+                    });
+             } else {
+                 setIsPlaying(nextIsPlaying);
+             }
+        }, [experienceInitialized, isPlaying]);
 
-        // Show/hide export panel
+        const handleVolumeChange = (e) => {
+            if (!experienceInitialized) return;
+            setVolume(parseFloat(e.target.value));
+        };
+
+        const handleMoodChange = React.useCallback((e) => {
+            if (!experienceInitialized || isExporting) return;
+            const newMood = e.target.value;
+            if (newMood !== currentMood) {
+                 setCurrentMood(newMood);
+                 if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', `Mood changed to ${newMood.charAt(0).toUpperCase() + newMood.slice(1)}`);
+            }
+        }, [experienceInitialized, currentMood, isExporting]);
+
         const toggleExportPanel = React.useCallback(() => {
-          setShowExportPanel(prev => !prev);
-        }, []);
+            if (isExporting) return;
+            setShowExportPanel(prev => !prev);
+        }, [isExporting]);
 
-        // Toggle UI visibility
         const toggleUIVisibility = React.useCallback(() => {
           setUiVisible(prevUiVisible => {
               const nextUiVisible = !prevUiVisible;
-              if (!nextUiVisible && uiVisibilityTimeoutRef.current) {
+              if (uiVisibilityTimeoutRef.current) {
                   clearTimeout(uiVisibilityTimeoutRef.current);
                   uiVisibilityTimeoutRef.current = null;
               }
@@ -1021,254 +1106,323 @@
           });
         }, []);
 
-       // Set up keyboard shortcuts - only after experience is initialized
+        // --- Keyboard Shortcuts ---
         React.useEffect(() => {
           const handleKeyPress = (e) => {
             if (showOnboarding || !experienceInitialized || showExportPanel || isExporting ||
-                e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-
-            if (e.code === 'Space') { e.preventDefault(); togglePlayback(); }
-            if (availableMoods.length >= 5) {
-                 if (e.code === 'Digit1' || e.code === 'Numpad1') handleMoodChange(availableMoods[0].id);
-                 if (e.code === 'Digit2' || e.code === 'Numpad2') handleMoodChange(availableMoods[1].id);
-                 if (e.code === 'Digit3' || e.code === 'Numpad3') handleMoodChange(availableMoods[2].id);
-                 if (e.code === 'Digit4' || e.code === 'Numpad4') handleMoodChange(availableMoods[3].id);
-                 if (e.code === 'Digit5' || e.code === 'Numpad5') handleMoodChange(availableMoods[4].id);
+                document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'SELECT' ||
+                e.ctrlKey || e.altKey || e.metaKey) {
+                 return;
             }
-            if (e.code === 'KeyE') { toggleExportPanel(); }
-            if (e.code === 'KeyH') { toggleUIVisibility(); }
+
+            const moodIndex = parseInt(e.key) - 1;
+            if (!isNaN(moodIndex) && moodIndex >= 0 && moodIndex < availableMoods.length) {
+                if (currentMood !== availableMoods[moodIndex].id) {
+                    setCurrentMood(availableMoods[moodIndex].id);
+                    if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', `Mood changed to ${availableMoods[moodIndex].label}`);
+                }
+                return;
+            }
+
+            switch (e.code) {
+                case 'Space': e.preventDefault(); togglePlayback(); break;
+                case 'KeyE': toggleExportPanel(); break;
+                case 'KeyH': toggleUIVisibility(); break;
+                case 'ArrowUp': e.preventDefault(); setVolume(prev => Math.min(1, prev + 0.05)); break;
+                case 'ArrowDown': e.preventDefault(); setVolume(prev => Math.max(0, prev - 0.05)); break;
+            }
           };
 
-          if (experienceInitialized) window.addEventListener('keydown', handleKeyPress);
+          if (experienceInitialized && !showOnboarding) {
+              window.addEventListener('keydown', handleKeyPress);
+          }
           return () => window.removeEventListener('keydown', handleKeyPress);
-        }, [showOnboarding, experienceInitialized, showExportPanel, isExporting, togglePlayback, handleMoodChange, toggleExportPanel, toggleUIVisibility, availableMoods]); // Added availableMoods
+        }, [showOnboarding, experienceInitialized, showExportPanel, isExporting, togglePlayback, currentMood, availableMoods, toggleExportPanel, toggleUIVisibility, volume]);
 
-
-        // Handle mouse movement to temporarily show UI - only after experience is initialized
+        // --- Mouse Move for UI Visibility ---
         React.useEffect(() => {
-          const handleMouseMove = () => {
+          const handleInteraction = () => {
             if (uiVisibilityTimeoutRef.current) clearTimeout(uiVisibilityTimeoutRef.current);
             if (!uiVisible) setUiVisible(true);
             if (!showExportPanel) {
-              uiVisibilityTimeoutRef.current = setTimeout(() => setUiVisible(false), 3000);
+                 uiVisibilityTimeoutRef.current = setTimeout(() => {
+                      if (!showExportPanel) setUiVisible(false);
+                 }, 3000);
             }
           };
-
-          if (!showOnboarding && experienceInitialized) {
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('touchstart', handleMouseMove, {passive: true});
-            if (uiVisible && !showExportPanel) handleMouseMove();
+          if (experienceInitialized && !showOnboarding) {
+            window.addEventListener('mousemove', handleInteraction);
+            window.addEventListener('touchstart', handleInteraction, {passive: true});
+            if (uiVisible && !showExportPanel) handleInteraction();
           }
-
           return () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('touchstart', handleMouseMove);
+            window.removeEventListener('mousemove', handleInteraction);
+            window.removeEventListener('touchstart', handleInteraction);
             if (uiVisibilityTimeoutRef.current) clearTimeout(uiVisibilityTimeoutRef.current);
           };
         }, [uiVisible, showOnboarding, showExportPanel, experienceInitialized]);
 
-        // Handle enter from onboarding
-        const handleEnterExperience = () => {
-          // Hide the original HTML disclaimer immediately if it exists
-          const htmlDisclaimer = document.getElementById('disclaimer-banner');
-          if (htmlDisclaimer && !htmlDisclaimer.classList.contains('hidden')) {
-              htmlDisclaimer.classList.add('hidden');
-              document.documentElement.style.setProperty('--disclaimer-height', '0px');
-          }
-          setShowOnboarding(false);
-          setTimeout(initializeExperience, 100);
-        };
-
-
-        // Handle export quality change
+        // --- Export Logic ---
         const handleExportQualityChange = (quality) => setExportQuality(quality);
-        // Handle export format change
         const handleExportFormatChange = (format) => setExportFormat(format);
-        // Handle export duration change
         const handleExportDurationChange = (e) => {
           const duration = parseInt(e.target.value, 10);
           if (!isNaN(duration) && duration >= 5 && duration <= 1800) {
-            setExportDuration(duration);
+              setExportDuration(duration);
+          } else if (!isNaN(duration)) {
+               const clampedDuration = duration < 5 ? 5 : 1800;
+               setExportDuration(clampedDuration);
+               if (typeof ToastSystem !== 'undefined') ToastSystem.notify('warning', `Duration clamped to ${clampedDuration}s.`);
           }
         };
 
-        // Start export process
         const startExport = async () => {
-          if (!videoExporterRef.current) {
-             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Video export is not available. Refresh the page and try again.');
-            return;
-          }
-          if (isExporting) return;
-
-          setIsExporting(true);
-          setExportProgress(0);
-
-          try {
-            if (!isPlaying || audioEngineRef.current?.audioContext?.state !== 'running') {
-                setIsPlaying(true);
-                if (audioEngineRef.current?.audioContext?.state === 'suspended') await audioEngineRef.current.audioContext.resume();
-                await new Promise(resolve => setTimeout(resolve, 500));
+            if (!experienceInitialized || !videoExporterRef.current) {
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Cannot export: Experience or exporter not ready.');
+                return;
             }
+            if (isExporting) return;
 
-             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', `Recording ${exportDuration}s video... Please wait.`);
-            await videoExporterRef.current.startRecording(exportQuality);
+            setIsExporting(true);
+            setExportProgress(0);
+            console.log(`App: Starting export - Duration: ${exportDuration}s, Quality: ${exportQuality}, Format: ${exportFormat}`);
 
-            const updateInterval = 100;
-            const totalUpdates = exportDuration * (1000 / updateInterval);
-            let updateCount = 0;
+            try {
+                let audioStarted = false;
+                if (!isPlaying || audioEngineRef.current?.audioContext?.state !== 'running') {
+                    setIsPlaying(true);
+                    if (audioEngineRef.current?.audioContext?.state === 'suspended') {
+                         await audioEngineRef.current.audioContext.resume();
+                         audioStarted = true;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, audioStarted ? 500 : 100));
+                }
+                if (audioEngineRef.current?.audioContext?.state !== 'running') {
+                     throw new Error("Audio context failed to start for recording.");
+                }
 
-            if (exportTimerRef.current) clearInterval(exportTimerRef.current);
-            exportTimerRef.current = setInterval(() => {
-              updateCount++;
-              const progress = Math.min((updateCount / totalUpdates) * 100, 99);
-              setExportProgress(progress);
-              if (updateCount >= totalUpdates) {
-                clearInterval(exportTimerRef.current);
-                exportTimerRef.current = null;
-                finishExport();
-              }
-            }, updateInterval);
-          } catch (error) {
-            console.error('Error starting export:', error);
-             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Failed to start recording: ${error.message}. Please try again.`);
-            setIsExporting(false);
-            if (exportTimerRef.current) clearInterval(exportTimerRef.current);
-          }
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', `Recording ${exportDuration}s video...`);
+                await videoExporterRef.current.startRecording(exportQuality);
+
+                const updateInterval = 100;
+                const totalUpdates = Math.max(1, exportDuration * (1000 / updateInterval));
+                let updateCount = 0;
+                if (exportTimerRef.current) clearInterval(exportTimerRef.current);
+
+                exportTimerRef.current = setInterval(() => {
+                    if (!audioEngineRef.current || !isExporting) { // Check isExporting flag too
+                         clearInterval(exportTimerRef.current);
+                         exportTimerRef.current = null;
+                         console.log("App: Export cancelled or component unmounted during recording.");
+                         if (videoExporterRef.current && videoExporterRef.current.mediaRecorder && videoExporterRef.current.mediaRecorder.state !== 'inactive') {
+                              videoExporterRef.current.mediaRecorder.stop();
+                         }
+                         setIsExporting(false);
+                         setExportProgress(0);
+                         return;
+                    }
+                    updateCount++;
+                    const progress = Math.min((updateCount / totalUpdates) * 100, 99);
+                    setExportProgress(progress);
+
+                    if (updateCount >= totalUpdates) {
+                        clearInterval(exportTimerRef.current);
+                        exportTimerRef.current = null;
+                        console.log("App: Recording timer finished, stopping recorder...");
+                        finishExport();
+                    }
+                }, updateInterval);
+
+            } catch (error) {
+                console.error('App: Error starting export:', error);
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Failed to start recording: ${error.message}.`);
+                setIsExporting(false);
+                setExportProgress(0);
+                if (exportTimerRef.current) clearInterval(exportTimerRef.current);
+            }
         };
 
-        // Finish export process
         const finishExport = async () => {
-          if (!videoExporterRef.current) {
-            if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', 'Video exporter not available for stopping.');
-            setIsExporting(false); setExportProgress(0); return;
-          }
-          try {
-             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', 'Processing video...');
-            const blob = await videoExporterRef.current.stopRecording();
-             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', 'Finalizing format...');
-            const finalBlob = await videoExporterRef.current.convertToFormat(blob, exportFormat, (p) => setExportProgress(99 + p * 0.01));
+             if (!isExporting || !videoExporterRef.current) {
+                 console.warn("App: finishExport called but not in exporting state or exporter missing.");
+                 setIsExporting(false); setExportProgress(0); return;
+             }
+            try {
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', 'Stopping recorder & processing video...');
+                const blob = await videoExporterRef.current.stopRecording();
+                if (!blob || blob.size === 0) throw new Error("Recording resulted in an empty file.");
 
-            let finalExtension = exportFormat;
-            if (finalBlob.type.includes('webm')) finalExtension = 'webm'; else if (finalBlob.type.includes('mp4')) finalExtension = 'mp4'; else if (finalBlob.type.includes('gif')) finalExtension = 'gif';
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('info', 'Finalizing format...');
+                const finalBlob = await videoExporterRef.current.convertToFormat(blob, exportFormat, (p) => setExportProgress(99 + p * 0.01));
+                let finalExtension = 'webm';
+                if (finalBlob.type.includes('mp4')) finalExtension = 'mp4';
+                else if (finalBlob.type.includes('gif')) finalExtension = 'gif';
 
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            const filename = `harmonic-visions-${currentMood}-${timestamp}.${finalExtension}`;
-            const link = videoExporterRef.current.createDownloadLink(finalBlob, filename);
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                const filename = `harmonic-visions-${currentMood}-${timestamp}.${finalExtension}`;
+                const link = videoExporterRef.current.createDownloadLink(finalBlob, filename);
+                document.body.appendChild(link); link.click(); document.body.removeChild(link);
+                URL.revokeObjectURL(link.href);
 
-            document.body.appendChild(link); link.click(); document.body.removeChild(link);
-            URL.revokeObjectURL(link.href);
+                setExportProgress(100);
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('success', `Video saved as ${filename}!`);
+                setTimeout(() => { setIsExporting(false); setExportProgress(0); setShowExportPanel(false); }, 2000);
 
-            setExportProgress(100);
-             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('success', 'Video created! Download started.');
-
-            setTimeout(() => { setIsExporting(false); setExportProgress(0); setShowExportPanel(false); }, 2000);
-          } catch (error) {
-            console.error('Error completing export:', error);
-             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Failed to complete recording: ${error.message}. Try a shorter duration?`);
-            setIsExporting(false); setExportProgress(0);
-          }
+            } catch (error) {
+                console.error('App: Error completing export:', error);
+                if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Export failed: ${error.message}.`);
+                setIsExporting(false); setExportProgress(0);
+            }
         };
 
-        // Enhanced Export Panel Component
-        const EnhancedExportPanel = () => {
-          const calculateEstimatedTime = () => {
-            const baseTimes = { low: 5, medium: 12, high: 20, ultra: 40 };
-            const formatMultiplier = exportFormat === 'gif' ? 2.0 : (exportFormat === 'mp4' ? 1.2 : 1.0);
-            const estimatedSeconds = (exportDuration / 60) * (baseTimes[exportQuality] || baseTimes.high) * formatMultiplier;
-            const minutes = Math.floor(estimatedSeconds / 60);
-            const seconds = Math.floor(estimatedSeconds % 60);
-            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-          };
-          const formatDuration = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+        // --- Enhanced Export Panel Component ---
+         const EnhancedExportPanel = () => {
+            const calculateEstimatedTime = () => `~${Math.ceil(exportDuration / 60 * 5)}m`; // Very rough estimate
+            const formatDuration = (s) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
-          return (
-            <div className="panel active premium-panel">
-              <div className="panel-header">
-                <h2>Export Video</h2>
-                <button className="close-button" onClick={toggleExportPanel} disabled={isExporting} aria-label="Close export panel" > × </button>
-              </div>
-              {isExporting ? (
-                <div className="progress-container">
-                  <div className="progress-bar"> <div className="progress-fill" style={{ width: `${exportProgress}%` }}></div> <div className="progress-glow" style={{ left: `${exportProgress}%` }}></div> </div>
-                  <div className="progress-text"> {exportProgress < 99 ? `Recording: ${exportProgress.toFixed(0)}%` : 'Processing video...'} </div>
-                  <div className="progress-details">Please wait while we create your experience</div>
+            return (
+                <div key={showExportPanel ? 'export-panel-visible' : 'export-panel-hidden'} className="panel active premium-panel">
+                    <div className="panel-header">
+                        <h2>Export Video</h2>
+                        <button className="close-button" onClick={toggleExportPanel} disabled={isExporting} aria-label="Close export panel">×</button>
+                    </div>
+                    {isExporting ? (
+                        <div className="progress-container">
+                            <div className="progress-bar">
+                                <div className="progress-fill" style={{ width: `${exportProgress}%` }}></div>
+                                <div className="progress-glow" style={{ left: `${exportProgress}%` }}></div>
+                            </div>
+                            <div className="progress-text">{exportProgress < 99 ? `Recording: ${exportProgress.toFixed(0)}%` : 'Processing...'}</div>
+                            <div className="progress-details">Please keep this tab active...</div>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="setting-group">
+                                <label htmlFor="duration-input">Duration (seconds)</label>
+                                <input id="duration-input" type="number" min="5" max="1800" step="5" value={exportDuration} onChange={handleExportDurationChange} />
+                            </div>
+                            <div className="setting-group">
+                                <label>Duration (mm:ss)</label>
+                                <div>{formatDuration(exportDuration)}</div>
+                            </div>
+                            <div className="setting-group quality-group">
+                                <label>Quality</label>
+                                <div className="quality-options">
+                                    {availableQualityOptions.map(opt => (
+                                        <div key={opt.id} className={`quality-option ${exportQuality === opt.id ? 'selected' : ''}`} onClick={() => handleExportQualityChange(opt.id)} role="radio" aria-checked={exportQuality === opt.id} tabIndex="0" onKeyDown={(e) => e.key === 'Enter' && handleExportQualityChange(opt.id)}>
+                                            <h4>{opt.label}</h4>
+                                            <p>{ opt.id === 'low' ? 'Faster, smaller file' : opt.id === 'medium' ? 'Good balance' : opt.id === 'high' ? 'Better quality' : 'Best, larger file'}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                             <div className="setting-group format-group">
+                                <label>Format</label>
+                                <div className="format-options">
+                                    {availableFormatOptions.map(opt => (
+                                        <div key={opt.id} className={`format-option ${exportFormat === opt.id ? 'selected' : ''}`} onClick={() => handleExportFormatChange(opt.id)} role="radio" aria-checked={exportFormat === opt.id} tabIndex="0" onKeyDown={(e) => e.key === 'Enter' && handleExportFormatChange(opt.id)}>
+                                            <div className="format-icon">{ opt.id === 'webm' ? '🎬' : opt.id === 'mp4' ? ' M ' : ' G '}</div>
+                                            <div className="format-label">{opt.label}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                             <div className="estimated-time">
+                                 Note: MP4/GIF export often defaults to WebM due to browser limits.<br/>
+                             </div>
+                            <button className="action-button premium-button" onClick={startExport}><span className="button-text">Start Recording</span><span className="button-icon">🔴</span></button>
+                        </>
+                    )}
                 </div>
-              ) : (
-                <>
-                  <div className="setting-group"> <label htmlFor="duration">Duration (seconds)</label> <input id="duration" type="number" min="5" max="1800" step="5" value={exportDuration} onChange={handleExportDurationChange} /> </div>
-                  <div className="setting-group"> <label>Duration (mm:ss)</label> <div>{formatDuration(exportDuration)}</div> </div>
-                  <div className="setting-group quality-group"> <label>Quality</label> <div className="quality-options"> {availableQualityOptions.map(opt => (<div key={opt.id} className={`quality-option ${exportQuality === opt.id ? 'selected' : ''}`} onClick={() => handleExportQualityChange(opt.id)} ><h4>{opt.label}</h4><p>{ opt.id === 'low' ? 'Faster export' : opt.id === 'ultra' ? 'Best quality' : `Balanced ${opt.id === 'medium' ? 'performance' : 'quality'}` }</p></div>))} </div> </div>
-                  <div className="setting-group format-group"> <label>Format</label> <div className="format-options"> {availableFormatOptions.map(opt => (<div key={opt.id} className={`format-option ${exportFormat === opt.id ? 'selected' : ''}`} onClick={() => handleExportFormatChange(opt.id)} ><div className="format-icon">{ opt.id === 'webm' ? '🎥' : opt.id === 'mp4' ? '📹' : '🖼️' }</div><div className="format-label">{opt.label}</div></div>))} </div> </div>
-                  <div className="estimated-time"> Estimated Processing Time: ~{calculateEstimatedTime()} </div>
-                  <button className="action-button premium-button" onClick={startExport}> <span className="button-text">Start Recording</span> <span className="button-icon">↓</span> </button>
-                </>
-              )}
-            </div>
-          );
+            );
         };
 
-        // === Render ===
+        // --- Render ---
         return (
-          <div className={`app-container ${!uiVisible ? 'ui-hidden' : ''}`}>
-            {/* React Disclaimer is rendered conditionally based on state */}
-            {showDisclaimerInApp && <DisclaimerBanner />}
+          <div key={showOnboarding ? 'onboarding' : 'experience'} className={`app-container ${!uiVisible ? 'ui-hidden' : ''}`}>
+             {showDisclaimerInApp && <DisclaimerBanner />}
 
-            {showOnboarding ? (
-              <Onboarding
-                moodDescriptions={availableMoodDescriptions} // Pass data here
-                onEnter={handleEnterExperience}
-              />
-            ) : (
-              <main className="main-content">
-                <div className="ui-hover-zone top"></div>
-                <div className="ui-hover-zone bottom"></div>
-                <header className="app-header premium-header">
-                  <h1 className="app-title">Harmonic Visions</h1>
-                  <div className="creator-badge"> FatStinkyPanda's Transcendence Experience <span className="support-text">Thanks for your support!</span> </div>
-                </header>
-                <canvas ref={canvasRef} className="visual-canvas" aria-label="Harmonic Visions Visual Experience" />
-                <div className="control-panel premium-controls" aria-label="Playback Controls">
-                  <div className="control-group"> <button className="play-button" onClick={togglePlayback} aria-label={isPlaying ? "Pause Playback" : "Start Playback"} title={isPlaying ? "Pause (Space)" : "Play (Space)"} > {isPlaying ? '❚❚' : '▶'} </button> </div>
-                  <div className="control-group"> <label htmlFor="volume">Volume</label> <input id="volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={handleVolumeChange} aria-label="Volume Control" className="premium-slider"/> </div>
-                  <div className="control-group"> <label htmlFor="mood">Mood</label> <div className="mood-tooltip">{availableMoodDescriptions[currentMood] || 'Loading...'}</div> <select id="mood" className="control-select premium-select" value={currentMood} onChange={(e) => handleMoodChange(e.target.value)} aria-label="Select Mood (Keys 1-5)" > {availableMoods.map(m => (<option key={m.id} value={m.id}>{m.label}</option>))} </select> </div>
-                  <div className="control-group"> <button className="export-button premium-export" onClick={toggleExportPanel} disabled={isExporting} title="Export Video (E)" > <span className="export-button-icon">↓</span> Export Video </button> </div>
-                </div>
-                <div className="ui-toggle premium-toggle" onClick={toggleUIVisibility} title={uiVisible ? "Hide UI (H)" : "Show UI (H)"} role="button" aria-pressed={!uiVisible} aria-label="Toggle User Interface Visibility"> <span className="ui-toggle-icon">{uiVisible ? '◱' : '◰'}</span> </div>
-                {showExportPanel && <EnhancedExportPanel />}
-                <div className="keyboard-shortcuts premium-shortcuts" aria-label="Keyboard Shortcuts Information"> Shortcuts: <span className="keyboard-shortcut">Space</span> Play/Pause <span className="keyboard-shortcut">1-5</span> Mood <span className="keyboard-shortcut">E</span> Export <span className="keyboard-shortcut">H</span> Hide UI </div>
-              </main>
-            )}
-            {isLoading && <LoadingIndicator />}
-            <ToastContainer />
+             {showOnboarding ? (
+               <Onboarding moodDescriptions={availableMoodDescriptions} onEnter={handleEnterExperience} />
+             ) : (
+               <main className="main-content">
+                 <div className="ui-hover-zone top"></div>
+                 <div className="ui-hover-zone bottom"></div>
+
+                 <header className="app-header premium-header">
+                   <h1 className="app-title">Harmonic Visions</h1>
+                   <div className="creator-badge"> FatStinkyPanda's Transcendence Experience <span className="support-text">Thanks for your support!</span> </div>
+                 </header>
+
+                 <canvas ref={canvasRef} className="visual-canvas" aria-label="Harmonic Visions Visual Experience" />
+
+                 {/* Render Look Around Hint */}
+                 <LookAroundHint
+                     isVisible={showLookAroundHint}
+                     onComplete={() => setShowLookAroundHint(false)} // Hide component after animation cycle
+                 />
+
+                 <div className="control-panel premium-controls" aria-label="Playback Controls">
+                    <div className="control-group">
+                        <button className="play-button" onClick={togglePlayback} disabled={!experienceInitialized} aria-label={isPlaying ? "Pause" : "Play"} title={isPlaying ? "Pause (Space)" : "Play (Space)"} > {isPlaying ? '❚❚' : '▶'} </button>
+                    </div>
+                    <div className="control-group">
+                        <label htmlFor="volume">Volume</label>
+                        <input id="volume" type="range" min="0" max="1" step="0.01" value={volume} onChange={handleVolumeChange} disabled={!experienceInitialized} aria-label="Volume Control (Up/Down Arrows)" className="premium-slider"/>
+                    </div>
+                    <div className="control-group">
+                        <label htmlFor="mood">Mood</label>
+                        <div className="mood-tooltip">{availableMoodDescriptions[currentMood] || 'Select a mood...'}</div>
+                        <select id="mood" className="control-select premium-select" value={currentMood} onChange={handleMoodChange} disabled={!experienceInitialized || isExporting} aria-label="Select Mood (Keys 1-5)" >
+                            {availableMoods.map(m => (<option key={m.id} value={m.id}>{m.label}</option>))}
+                        </select>
+                    </div>
+                    <div className="control-group">
+                        <button className="export-button premium-export" onClick={toggleExportPanel} disabled={isExporting || !experienceInitialized} title="Export Video (E)" >
+                            <span className="export-button-icon">↓</span> Export Video
+                        </button>
+                    </div>
+                 </div>
+
+                 <div className="ui-toggle premium-toggle" onClick={toggleUIVisibility} title={uiVisible ? "Hide UI (H)" : "Show UI (H)"} role="button" aria-pressed={!uiVisible} aria-label="Toggle UI Visibility">
+                     <span className="ui-toggle-icon">{uiVisible ? '◱' : '◰'}</span>
+                 </div>
+
+                 {showExportPanel && <EnhancedExportPanel />}
+
+                 <div className="keyboard-shortcuts premium-shortcuts" aria-label="Keyboard Shortcuts">
+                     Shortcuts: <span className="keyboard-shortcut">Space</span> Play/Pause | <span className="keyboard-shortcut">1-5</span> Mood | <span className="keyboard-shortcut">E</span> Export | <span className="keyboard-shortcut">H</span> Hide UI | <span className="keyboard-shortcut">↑↓</span> Volume
+                 </div>
+               </main>
+             )}
+
+             {isLoading && <LoadingIndicator />}
+             <ToastContainer />
           </div>
         );
-      }
+      } // End App component
 
-      // Wrap the React render in a try-catch and provide user feedback for errors
+      // --- React Render ---
       try {
-        console.log("Starting to render React application...");
+        console.log("Attempting to render React application...");
         window.reactReady = false;
         ReactDOM.render(<App />, document.getElementById('root'), () => {
-          console.log("React application mounted successfully");
+          console.log("React application rendered successfully.");
           window.reactReady = true;
-          if (window.scriptsLoaded && typeof window.hideInitialLoader === 'function') {
-            window.hideInitialLoader();
+          if (window.dependenciesLoaded && typeof window.hideInitialLoader === 'function') {
+            hideInitialLoader();
           }
         });
       } catch (error) {
-        console.error("Failed to render React application:", error);
-        const errorMessage = "Application failed to initialize. Please try refreshing the page.";
+        console.error("React Render Error:", error);
+        if (typeof window.hideInitialLoader === 'function') hideInitialLoader();
         if (typeof window.showErrorScreen === 'function') {
-          window.showErrorScreen(errorMessage + " Error: " + error.message);
+          window.showErrorScreen(`React failed to render (${error.message}). Please refresh.`);
         } else {
-          const root = document.getElementById('root');
-          if (root) {
-            root.innerHTML = `<div style="padding: 30px; text-align: center; color: white;"><h2>Application Error</h2><p>${errorMessage}</p><p style="color: #999; margin-top: 20px;">Error details: ${error.message}</p><button style="margin-top: 20px; padding: 10px 20px;" onclick="window.location.reload()">Refresh Page</button></div>`;
-          }
-          const initialLoader = document.getElementById('initial-loader');
-          if (initialLoader) initialLoader.style.display = 'none';
+           document.body.innerHTML = `<div style='color:white; padding: 20px;'>Fatal Error: React failed to render. Please refresh. ${error.message}</div>`;
         }
       }
     </script>
+
 </body>
 </html>
