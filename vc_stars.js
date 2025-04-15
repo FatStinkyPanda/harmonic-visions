@@ -14,15 +14,80 @@ class VCStars {
         this.lastTreble = 0;
         this.lastMid = 0;
 
+        // Add mood configuration properties
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {}; // Store base settings from data.js
+
         console.log("VCStars module created");
+    }
+
+    /**
+     * Maps a value from 0-100 range to a target range.
+     * @param {number} value0to100 - Value between 0-100 to map
+     * @param {number} minTarget - Minimum target value
+     * @param {number} maxTarget - Maximum target value
+     * @returns {number} Mapped value in the target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the 0-100 mood configuration to the visual elements.
+     * @param {number} transitionTime - Time in seconds for the transition
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig) return; // Check if config exists
+
+        // For visual modules, we handle the effects right here
+        console.log(`VCStars: Applying mood config: volume=${this.moodConfig.volume}, occurrence=${this.moodConfig.occurrence}, intensity=${this.moodConfig.intensity}`);
+
+        // --- Apply Volume (Global Brightness for Stars) ---
+        if (this.starMaterial && this.moodConfig.volume !== undefined) {
+            const baseIntensity = this.baseSettings.globalIntensity || 1.0;
+            const targetIntensity = this._mapValue(this.moodConfig.volume, 0.1, baseIntensity);
+            console.log(`VCStars: Applying Volume ${this.moodConfig.volume}/100 -> globalIntensity ${targetIntensity.toFixed(2)}`);
+            this.starMaterial.uniforms.globalIntensity.value = targetIntensity;
+        }
+
+        // --- Apply Occurrence (Number of Stars/Nebulae) ---
+        // For stars/nebulae, occurrence affects the count of objects during creation
+        // The _createStars and _createNebulae methods use this.moodConfig.occurrence
+
+        // --- Apply Intensity (Visual Effect Strength) ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`VCStars: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // For nebulae, intensity affects the opacity/brightness
+            this.nebulaMaterials.forEach(material => {
+                if (material && material.uniforms.opacityFactor) {
+                    const baseOpacity = this.baseSettings.nebulaOpacityBase || 0.1;
+                    const maxOpacity = this.baseSettings.nebulaOpacityMax || 0.5;
+                    const targetOpacity = this._mapValue(this.moodConfig.intensity, baseOpacity, maxOpacity);
+                    material.uniforms.opacityFactor.value = targetOpacity;
+                }
+            });
+            
+            // For stars, intensity affects the base size
+            if (this.starMaterial && this.starMaterial.uniforms.baseSize) {
+                const baseSizeValue = this.baseSettings.starBaseSizeBase || 0.05;
+                const maxSizeValue = this.baseSettings.starBaseSizeMax || 0.12;
+                const targetSize = this._mapValue(this.moodConfig.intensity, baseSizeValue, maxSizeValue);
+                this.starMaterial.uniforms.baseSize.value = targetSize;
+            }
+        }
     }
 
     /**
      * Initializes the stars and nebulae based on the current mood settings.
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
+     * @param {object} moodConfig - The 0-100 configuration for volume, occurrence, and intensity.
      */
-    init(scene, settings) {
+    init(scene, settings, moodConfig) {
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error("VCStars: Scene, settings, settings.colors, or THREE library missing for initialization.");
             if(typeof ToastSystem !== 'undefined') {
@@ -35,12 +100,19 @@ class VCStars {
         this.dispose(scene);
         console.log("VCStars: Initializing...");
 
+        // Store base settings and mood config
+        this.baseSettings = { ...settings };
+        this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge with defaults
+
         try {
             // --- Stars ---
             this._createStars(scene, settings);
 
             // --- Nebulae ---
             this._createNebulae(scene, settings);
+
+            // Apply mood configuration after creation
+            this._applyMoodConfig(0);
 
             console.log(`VCStars: Initialized successfully with ${this.stars ? this.stars.geometry.attributes.position.count : 0} stars and ${this.nebulae.length} nebulae.`);
 
@@ -61,7 +133,14 @@ class VCStars {
      * @private
      */
     _createStars(scene, settings) {
-        const starCount = 1500 + Math.floor(settings.complexity * 3500); // Adjust count based on complexity
+        // Get the occurrence factor (0.2-1.0)
+        const occurrenceFactor = this._mapValue(this.moodConfig.occurrence, 0.2, 1.0);
+        
+        // Use existing formula but scale by occurrence factor
+        const starCount = Math.floor((1500 + Math.floor(settings.complexity * 3500)) * occurrenceFactor);
+        
+        console.log(`VCStars: Creating ${starCount} stars (occurrence: ${this.moodConfig.occurrence}/100, factor: ${occurrenceFactor.toFixed(2)})`);
+
         const starGeometry = new THREE.BufferGeometry();
 
         const positions = new Float32Array(starCount * 3);
@@ -214,7 +293,14 @@ class VCStars {
      * @private
      */
     _createNebulae(scene, settings) {
-        const nebulaCount = 3 + Math.floor(settings.complexity * 5); // Fewer, more impactful nebulae
+        // Get the occurrence factor (0.3-1.0)
+        const occurrenceFactor = this._mapValue(this.moodConfig.occurrence, 0.3, 1.0);
+        
+        // Use existing formula but scale by occurrence factor
+        const nebulaCount = Math.floor((3 + Math.floor(settings.complexity * 5)) * occurrenceFactor);
+        
+        console.log(`VCStars: Creating ${nebulaCount} nebulae (occurrence: ${this.moodConfig.occurrence}/100, factor: ${occurrenceFactor.toFixed(2)})`);
+        
         this.nebulaMaterials = []; // Reset materials array
 
         for (let i = 0; i < nebulaCount; i++) {
@@ -318,7 +404,6 @@ class VCStars {
                         gl_FragColor = vec4(color, alpha); // Output color/alpha, Three.js adds fog
 
                         if (gl_FragColor.a < 0.01) discard; // Discard transparent fragments
-
                     }
                 `,
                 blending: THREE.AdditiveBlending, // Use Additive for glowing effect
@@ -352,6 +437,54 @@ class VCStars {
             this.nebulae.push(nebula);
             this.nebulaMaterials.push(nebulaMaterial); // Store material reference
             this.objects.push(nebula);
+        }
+    }
+
+    /**
+     * Changes the mood settings for stars and nebulae.
+     * @param {THREE.Scene} scene - The main Three.js scene.
+     * @param {object} newSettings - The new mood-specific settings object.
+     * @param {number} transitionTime - Time in seconds for the transition.
+     * @param {object} moodConfig - The new 0-100 configuration for volume, occurrence, and intensity.
+     */
+    changeMood(scene, newSettings, transitionTime, moodConfig) {
+        if (!scene || !this.stars) {
+            console.error("VCStars: Cannot change mood, module not properly initialized.");
+            return;
+        }
+        
+        console.log(`VCStars: Changing mood with transition time ${transitionTime}s. Config:`, moodConfig);
+        
+        try {
+            // Store new settings and config
+            this.baseSettings = { ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
+            
+            // Apply the mood configuration with the specified transition time
+            this._applyMoodConfig(transitionTime);
+            
+            // Update fog colors/distances if they've changed in the new settings
+            if (this.starMaterial && this.starMaterial.uniforms.fogColor) {
+                this.starMaterial.uniforms.fogColor.value.set(newSettings.fogColor || '#000000');
+                if (newSettings.cameraDistance) {
+                    this.starMaterial.uniforms.fogNear.value = newSettings.cameraDistance + 50;
+                    this.starMaterial.uniforms.fogFar.value = newSettings.cameraDistance + 200;
+                }
+            }
+            
+            this.nebulaMaterials.forEach(material => {
+                if (material && material.uniforms.fogColor) {
+                    material.uniforms.fogColor.value.set(newSettings.fogColor || '#000000');
+                    if (newSettings.cameraDistance) {
+                        material.uniforms.fogNear.value = newSettings.cameraDistance + 50;
+                        material.uniforms.fogFar.value = newSettings.cameraDistance + 200;
+                    }
+                }
+            });
+            
+            console.log(`VCStars: Mood changed successfully.`);
+        } catch (error) {
+            console.error("VCStars: Error during mood change:", error);
         }
     }
 

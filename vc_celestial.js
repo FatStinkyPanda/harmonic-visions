@@ -30,7 +30,133 @@ class VCCelestial {
         this.peakImpactSmoothed = 0;
         this.globalIntensitySmoothed = 0.8;
 
+        // --- Volume/Occurrence/Intensity Config ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {}; // Store base settings from data.js
+
         console.log("VCCelestial module created");
+    }
+
+    /**
+     * Maps a value from 0-100 scale to a target range.
+     * @param {number} value0to100 - Input value (0-100)
+     * @param {number} minTarget - Minimum target value
+     * @param {number} maxTarget - Maximum target value
+     * @returns {number} - Mapped value in the target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the mood configuration (volume, occurrence, intensity) to the module.
+     * @param {number} transitionTime - Transition time in seconds.
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        console.log(`VCCelestial: Applying mood config: volume=${this.moodConfig.volume}, occurrence=${this.moodConfig.occurrence}, intensity=${this.moodConfig.intensity}`);
+        
+        // --- Apply Volume (Visual equivalent: overall opacity/visibility) ---
+        if (this.moodConfig.volume !== undefined) {
+            // For celestial bodies, volume controls the overall opacity and light intensity
+            const targetOpacity = this._mapValue(this.moodConfig.volume, 0.2, 1.0);
+            
+            // Apply to primary body
+            if (this.primaryBody && this.primaryBody.material) {
+                this.primaryBody.material.opacity = targetOpacity;
+                this.primaryBody.material.transparent = targetOpacity < 0.99;
+                
+                // If using MeshBasicMaterial, adjust color intensity
+                if (this.primaryBody.material.isMeshBasicMaterial) {
+                    const baseColor = new THREE.Color(this.baseSettings.colors[0]);
+                    this.primaryBody.material.color.copy(baseColor).multiplyScalar(targetOpacity);
+                }
+            }
+            
+            // Apply to planets
+            this.planets.forEach(planet => {
+                if (planet.material) {
+                    planet.material.opacity = targetOpacity;
+                    planet.material.transparent = targetOpacity < 0.99;
+                }
+            });
+            
+            // Apply to primary light intensity
+            if (this.primaryLight) {
+                const isSunLike = ['uplifting', 'warm', 'bright'].includes(this.currentMood);
+                const isCosmic = this.currentMood === 'cosmic';
+                const baseLightIntensity = isCosmic ? 1.5 : (isSunLike ? 2.0 : 0.8);
+                this.primaryLight.intensity = baseLightIntensity * targetOpacity;
+                console.log(`  -> Primary light intensity: ${this.primaryLight.intensity.toFixed(2)}`);
+            }
+        }
+        
+        // --- Apply Occurrence (Number of visible planets) ---
+        if (this.moodConfig.occurrence !== undefined && this.planets.length > 0) {
+            // Calculate how many planets should be visible based on occurrence
+            const visibleCount = Math.max(1, Math.floor(this._mapValue(
+                this.moodConfig.occurrence, 
+                1, // Always show at least one planet
+                this.planets.length // Show all planets at 100%
+            )));
+            
+            // Show/hide planets based on the count
+            this.planets.forEach((planet, index) => {
+                planet.visible = index < visibleCount;
+            });
+            
+            console.log(`  -> Setting ${visibleCount}/${this.planets.length} planets visible based on occurrence`);
+        }
+        
+        // --- Apply Intensity (Size, brightness, emission) ---
+        if (this.moodConfig.intensity !== undefined) {
+            // 1. Primary body size and glow
+            if (this.primaryBody) {
+                const isCosmic = this.currentMood === 'cosmic';
+                const isSunLike = ['uplifting', 'warm', 'bright'].includes(this.currentMood);
+                const baseSize = isCosmic ? 15 : (isSunLike ? 12 : 8);
+                const targetSize = this._mapValue(this.moodConfig.intensity, baseSize * 0.7, baseSize * 1.3);
+                
+                const scaleFactor = targetSize / baseSize;
+                this.primaryBody.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                console.log(`  -> Primary body scale: ${scaleFactor.toFixed(2)}`);
+            }
+            
+            // 2. Planet reactivity parameters
+            this.planets.forEach(planet => {
+                if (planet.userData) {
+                    // Scale planet base scale by intensity
+                    const baseScale = planet.userData.baseScale || 1.0;
+                    const targetScale = this._mapValue(this.moodConfig.intensity, baseScale * 0.6, baseScale * 1.5);
+                    planet.scale.set(targetScale, targetScale, targetScale);
+                    
+                    // Adjust emissive intensity if available
+                    if (planet.material && planet.material.emissiveIntensity !== undefined) {
+                        const baseEmissive = planet.userData.baseEmissiveIntensity || 0.1;
+                        const targetEmissive = this._mapValue(
+                            this.moodConfig.intensity,
+                            baseEmissive * 0.3,
+                            baseEmissive * 3.0
+                        );
+                        planet.material.emissiveIntensity = targetEmissive;
+                    }
+                }
+            });
+            
+            // 3. Adjust orbit speed based on intensity
+            this.planets.forEach(planet => {
+                if (planet.userData) {
+                    const baseSpeed = planet.userData.baseOrbitSpeed || planet.userData.orbitSpeed || 0.02;
+                    planet.userData.orbitSpeed = this._mapValue(
+                        this.moodConfig.intensity,
+                        baseSpeed * 0.4,  // Slower at low intensity
+                        baseSpeed * 1.7   // Faster at high intensity
+                    );
+                }
+            });
+        }
     }
 
     /**
@@ -38,8 +164,9 @@ class VCCelestial {
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
      * @param {string} mood - The current mood string.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration for this mood.
      */
-    init(scene, settings, mood) {
+    init(scene, settings, mood, moodConfig) {
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error("VCCelestial: Scene, settings, settings.colors, or THREE library missing for initialization.");
             if (typeof ToastSystem !== 'undefined') {
@@ -48,10 +175,15 @@ class VCCelestial {
             return;
         }
         this.currentMood = mood || 'calm'; // Store the current mood
+        
+        // Store the specific 0-100 configuration for this mood
+        this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
+        // Store base settings for reference
+        this.baseSettings = { ...settings };
 
         // Dispose of any existing objects first
         this.dispose(scene);
-        console.log(`VCCelestial: Initializing for mood '${this.currentMood}'...`);
+        console.log(`VCCelestial: Initializing for mood '${this.currentMood}'... Config:`, this.moodConfig);
 
         try {
             // --- Create Primary Body (Sun/Moon) ---
@@ -59,6 +191,9 @@ class VCCelestial {
 
             // --- Create Secondary Bodies (Planets) ---
             this._createPlanets(scene, settings);
+            
+            // --- Apply Initial Mood Config ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             console.log(`VCCelestial: Initialized successfully for mood '${this.currentMood}'.`);
 
@@ -138,7 +273,16 @@ class VCCelestial {
      */
     _createPlanets(scene, settings) {
         this.planets = []; // Clear previous planets
-        const planetCount = Math.floor(1 + settings.complexity * (this.currentMood === 'cosmic' ? 5 : 3)); // More planets in cosmic
+        
+        // Calculate planet count based on complexity AND occurrence
+        const basePlanetCount = Math.floor(1 + settings.complexity * (this.currentMood === 'cosmic' ? 5 : 3));
+        const planetCount = Math.max(1, Math.floor(this._mapValue(
+            this.moodConfig.occurrence, 
+            1, // At least 1 planet at minimum occurrence
+            basePlanetCount // Full count at 100% occurrence
+        )));
+        
+        console.log(`VCCelestial: Creating ${planetCount} planets (occurrence: ${this.moodConfig.occurrence}%, base count: ${basePlanetCount})`);
 
         for (let i = 0; i < planetCount; i++) {
             try {
@@ -176,12 +320,17 @@ class VCCelestial {
                     orbitRadius * Math.sin(angle)
                 );
 
+                // Calculate orbit speed - store base value for intensity scaling
+                const baseOrbitSpeed = 0.01 + Math.random() * 0.03;
+                const orbitSpeed = baseOrbitSpeed * settings.speed;
+
                 // Store orbital parameters for animation
                 planet.userData = {
                     module: 'VCCelestial',
                     type: 'planet',
                     orbitRadius: orbitRadius,
-                    orbitSpeed: (0.01 + Math.random() * 0.03) * settings.speed, // Speed depends on mood base speed
+                    orbitSpeed: orbitSpeed,
+                    baseOrbitSpeed: baseOrbitSpeed, // Store base for intensity scaling
                     angleOffset: angle,
                     yOffset: yOffset,
                     baseScale: size, // Store base size for pulsing
@@ -243,6 +392,115 @@ class VCCelestial {
      }
 
     /**
+     * Changes the current mood settings with a smooth transition.
+     * @param {string} newMood - The new mood name.
+     * @param {object} newSettings - The new mood-specific settings object.
+     * @param {number} transitionTime - Transition time in seconds.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration for this mood.
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
+        if (!newSettings || !newSettings.colors) {
+            console.error("VCCelestial: New settings or colors missing for mood change.");
+            return;
+        }
+        
+        console.log(`VCCelestial: Changing mood to '${newMood}'... Config:`, moodConfig);
+        
+        try {
+            // Store new base settings and 0-100 config
+            this.baseSettings = { ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
+            this.currentMood = newMood;
+            
+            // --- Apply New Mood Config with Transition ---
+            this._applyMoodConfig(transitionTime);
+            
+            // Update colors with transition
+            this._updateColors(newSettings.colors, transitionTime);
+            
+            console.log(`VCCelestial: Mood parameters updated for '${newMood}'.`);
+            
+        } catch (error) {
+            console.error(`VCCelestial: Error during mood change to '${newMood}':`, error);
+        }
+    }
+
+    /**
+     * Updates the colors of celestial objects when mood changes.
+     * @param {Array} colors - The new color palette.
+     * @param {number} transitionTime - Transition time in seconds.
+     * @private
+     */
+    _updateColors(colors, transitionTime) {
+        if (!colors || !colors.length) return;
+        
+        // Update primary body color
+        if (this.primaryBody && this.primaryBody.material) {
+            const isSunLike = ['uplifting', 'warm', 'bright'].includes(this.currentMood);
+            const isCosmic = this.currentMood === 'cosmic';
+            const color = isCosmic ? new THREE.Color(colors[2]).lerp(new THREE.Color(0xffffff), 0.3) :
+                          isSunLike ? new THREE.Color(colors[1]).lerp(new THREE.Color(0xffffff), 0.5) :
+                          new THREE.Color(colors[3]).lerp(new THREE.Color(0xffffff), 0.2);
+            
+            // Gradually change color if longer transition
+            if (transitionTime > 0.1) {
+                // Store color transition info
+                this.primaryBody.userData.colorTween = {
+                    startColor: this.primaryBody.material.color.clone(),
+                    targetColor: color,
+                    startTime: Date.now(),
+                    duration: transitionTime * 1000 // milliseconds
+                };
+            } else {
+                // Immediate change
+                this.primaryBody.material.color.copy(color);
+            }
+            
+            // Update primary light color too
+            if (this.primaryLight) {
+                const lightColor = color.clone().multiplyScalar(1.1); // Slightly brighter/whiter light
+                this.primaryLight.color.copy(lightColor);
+            }
+        }
+        
+        // Update a portion of planet colors with the new palette
+        const updateCount = Math.min(this.planets.length, Math.ceil(this.planets.length * 0.3));
+        for (let i = 0; i < updateCount; i++) {
+            const planetIndex = Math.floor(Math.random() * this.planets.length);
+            const planet = this.planets[planetIndex];
+            if (planet && planet.material) {
+                const colorIndex = Math.floor(Math.random() * colors.length);
+                const newColor = new THREE.Color(colors[colorIndex]);
+                
+                // Set up color transition
+                if (transitionTime > 0.1) {
+                    planet.userData.colorTween = {
+                        startColor: planet.material.color.clone(),
+                        targetColor: newColor,
+                        startTime: Date.now(),
+                        duration: transitionTime * 1000
+                    };
+                    
+                    if (planet.material.emissive) {
+                        planet.userData.emissiveTween = {
+                            startColor: planet.material.emissive.clone(),
+                            targetColor: newColor,
+                            startTime: Date.now(),
+                            duration: transitionTime * 1000
+                        };
+                    }
+                } else {
+                    // Immediate color change
+                    planet.material.color.copy(newColor);
+                    if (planet.material.emissive) {
+                        planet.material.emissive.copy(newColor);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Updates celestial bodies' positions, appearance, and reactivity.
      * @param {number} time - The current time elapsed (usually from clock.getElapsedTime()).
      * @param {object} visualParams - The visual parameters object from AudioVisualConnector.
@@ -259,6 +517,22 @@ class VCCelestial {
         // --- Update Primary Body ---
         if (this.primaryBody) {
             try {
+                // Process any color transitions
+                if (this.primaryBody.userData.colorTween) {
+                    const tween = this.primaryBody.userData.colorTween;
+                    const elapsed = Date.now() - tween.startTime;
+                    const progress = Math.min(1.0, elapsed / tween.duration);
+                    
+                    if (progress < 1.0) {
+                        // Interpolate color
+                        this.primaryBody.material.color.copy(tween.startColor).lerp(tween.targetColor, progress);
+                    } else {
+                        // Transition complete
+                        this.primaryBody.material.color.copy(tween.targetColor);
+                        delete this.primaryBody.userData.colorTween;
+                    }
+                }
+                
                 // Gentle rotation
                 this.primaryBody.rotation.y = time * 0.02 * visualParams.movementSpeed;
 
@@ -295,6 +569,33 @@ class VCCelestial {
             try {
                 const userData = planet.userData;
                 if (!userData) return;
+                
+                // Process color transitions
+                if (userData.colorTween) {
+                    const tween = userData.colorTween;
+                    const elapsed = Date.now() - tween.startTime;
+                    const progress = Math.min(1.0, elapsed / tween.duration);
+                    
+                    if (progress < 1.0) {
+                        planet.material.color.copy(tween.startColor).lerp(tween.targetColor, progress);
+                    } else {
+                        planet.material.color.copy(tween.targetColor);
+                        delete userData.colorTween;
+                    }
+                }
+                
+                if (userData.emissiveTween && planet.material.emissive) {
+                    const tween = userData.emissiveTween;
+                    const elapsed = Date.now() - tween.startTime;
+                    const progress = Math.min(1.0, elapsed / tween.duration);
+                    
+                    if (progress < 1.0) {
+                        planet.material.emissive.copy(tween.startColor).lerp(tween.targetColor, progress);
+                    } else {
+                        planet.material.emissive.copy(tween.targetColor);
+                        delete userData.emissiveTween;
+                    }
+                }
 
                 // Orbit animation
                 const currentAngle = time * userData.orbitSpeed * visualParams.movementSpeed + userData.angleOffset;

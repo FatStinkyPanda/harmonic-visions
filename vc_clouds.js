@@ -20,6 +20,22 @@ class VCClouds {
         this.SWIRL_INTENSITY = 0.8;     // Controls the intensity of swirling motion
         this.OPACITY_BASE = 0.1;        // Minimum opacity
         this.OPACITY_RANGE = 0.3;       // Max additional opacity based on noise/audio
+        
+        // --- Added Mood Configuration Support ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {};         // Store base settings from data.js
+        
+        // Default parameter ranges for intensity mapping
+        this.baseParamRanges = {
+            swirlIntensityMin: 0.4,     // Minimum swirl at 0% intensity
+            swirlIntensityMax: 1.2,     // Maximum swirl at 100% intensity
+            opacityRangeMin: 0.15,      // Minimum opacity range at 0% intensity
+            opacityRangeMax: 0.5,       // Maximum opacity range at 100% intensity
+            driftSpeedMin: 0.02,        // Minimum drift speed at 0% intensity
+            driftSpeedMax: 0.08,        // Maximum drift speed at 100% intensity
+            sizeVariationMin: 2.0,      // Minimum size variation at 0% intensity
+            sizeVariationMax: 6.0       // Maximum size variation at 100% intensity
+        };
 
         // --- State ---
         this.cloudInstances = null;     // THREE.InstancedMesh object
@@ -27,6 +43,7 @@ class VCClouds {
         this.instanceGeometry = null;   // THREE.BufferGeometry reference (e.g., BoxGeometry)
         this.objects = [];              // Tracks all THREE objects created by this module (mesh, geometry, material)
         this.currentMood = 'calm';      // Track the current mood
+        this.currentTargetInstanceCount = this.BASE_INSTANCE_COUNT; // Target instance count based on occurrence
 
         // --- Internal Animation/Reactivity State ---
         this.smoothedParams = {         // Store smoothed visual parameters locally
@@ -41,14 +58,96 @@ class VCClouds {
 
         console.log("VCClouds module created");
     }
+    
+    /**
+     * Maps a value from 0-100 range to a target parameter range
+     * @param {number} value0to100 - Input value in 0-100 range
+     * @param {number} minTarget - Minimum value in target range
+     * @param {number} maxTarget - Maximum value in target range
+     * @returns {number} Mapped value in target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+    
+    /**
+     * Applies the mood configuration values to cloud parameters
+     * @param {number} transitionTime - Time in seconds for parameter transitions
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig) return;
+        
+        // --- Apply Occurrence (Controls Number of Instances) ---
+        if (this.moodConfig.occurrence !== undefined) {
+            const minInstanceCount = Math.max(50, this.BASE_INSTANCE_COUNT * 0.5); // Never go below 50 or half base
+            const targetInstanceCount = Math.floor(this._mapValue(
+                this.moodConfig.occurrence,
+                minInstanceCount,
+                this.MAX_INSTANCE_COUNT
+            ));
+            // Store this for use during init/reinit (actual instance count can only be changed at init)
+            this.currentTargetInstanceCount = targetInstanceCount;
+            console.log(`VCClouds: Applying Occurrence ${this.moodConfig.occurrence}/100 -> targetInstanceCount ${targetInstanceCount}`);
+        }
+        
+        // --- Apply Intensity (Controls Visual Effects Strength) ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`VCClouds: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // Map intensity to various visual parameters
+            this.SWIRL_INTENSITY = this._mapValue(
+                this.moodConfig.intensity,
+                this.baseSettings.swirlIntensityMin || this.baseParamRanges.swirlIntensityMin,
+                this.baseSettings.swirlIntensityMax || this.baseParamRanges.swirlIntensityMax
+            );
+            
+            this.OPACITY_RANGE = this._mapValue(
+                this.moodConfig.intensity,
+                this.baseSettings.opacityRangeMin || this.baseParamRanges.opacityRangeMin,
+                this.baseSettings.opacityRangeMax || this.baseParamRanges.opacityRangeMax
+            );
+            
+            this.DRIFT_SPEED_FACTOR = this._mapValue(
+                this.moodConfig.intensity,
+                this.baseSettings.driftSpeedMin || this.baseParamRanges.driftSpeedMin,
+                this.baseSettings.driftSpeedMax || this.baseParamRanges.driftSpeedMax
+            );
+            
+            this.SIZE_VARIATION = this._mapValue(
+                this.moodConfig.intensity,
+                this.baseSettings.sizeVariationMin || this.baseParamRanges.sizeVariationMin,
+                this.baseSettings.sizeVariationMax || this.baseParamRanges.sizeVariationMax
+            );
+            
+            // Update shader uniforms if material already exists
+            if (this.instanceMaterial && this.instanceMaterial.uniforms) {
+                const uniforms = this.instanceMaterial.uniforms;
+                if (uniforms.uSwirlIntensity) {
+                    uniforms.uSwirlIntensity.value = this.SWIRL_INTENSITY;
+                }
+                if (uniforms.uOpacityRange) {
+                    uniforms.uOpacityRange.value = this.OPACITY_RANGE;
+                }
+                if (uniforms.uDriftSpeedFactor) {
+                    uniforms.uDriftSpeedFactor.value = this.DRIFT_SPEED_FACTOR;
+                }
+                
+                console.log(`VCClouds: Applied visual parameters - Swirl: ${this.SWIRL_INTENSITY.toFixed(2)}, Opacity Range: ${this.OPACITY_RANGE.toFixed(2)}, Drift: ${this.DRIFT_SPEED_FACTOR.toFixed(2)}`);
+            }
+        }
+    }
 
     /**
      * Initializes the cloud system based on the current mood settings.
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
      * @param {string} mood - The current mood string (used for settings lookup if needed).
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration for this mood.
      */
-    init(scene, settings, mood) {
+    init(scene, settings, mood, moodConfig) {
         // --- Pre-checks ---
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error("VCClouds: Scene, settings, settings.colors, or THREE library missing for initialization.");
@@ -63,17 +162,27 @@ class VCClouds {
         }
         this.currentMood = mood || 'calm';
 
+        // --- Store base settings and mood config ---
+        this.baseSettings = { ...settings };
+        this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config with defaults
+        
+        console.log(`VCClouds: Initializing for mood '${this.currentMood}'... Config:`, this.moodConfig);
+        
+        // --- Apply mood config to set parameters before initialization ---
+        this._applyMoodConfig(0);
+
         // --- Cleanup ---
         this.dispose(scene);
-        console.log(`VCClouds: Initializing for mood '${this.currentMood}'...`);
+        console.log(`VCClouds: Initializing clouds with ${this.currentTargetInstanceCount} instances`);
 
         try {
             // --- Determine Instance Count ---
-            const instanceCount = Math.floor(
+            // Use occurrence-driven instance count from _applyMoodConfig, or fall back to complexity-based calculation
+            const instanceCount = this.currentTargetInstanceCount || Math.floor(
                 THREE.MathUtils.lerp(
                     this.BASE_INSTANCE_COUNT,
                     this.MAX_INSTANCE_COUNT,
-                    settings.complexity // Use mood complexity
+                    settings.complexity // Use mood complexity as fallback
                 )
             );
             console.log(`VCClouds: Instance count: ${instanceCount}`);
@@ -120,7 +229,7 @@ class VCClouds {
                 rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
                 quaternion.setFromEuler(rotation);
 
-                // Random base scale
+                // Random base scale - now using SIZE_VARIATION from intensity mapping
                 const baseScale = this.BASE_PARTICLE_SIZE + Math.random() * this.SIZE_VARIATION;
                 scale.set(baseScale, baseScale, baseScale);
 
@@ -456,6 +565,49 @@ class VCClouds {
              }
              // Consider disabling the module here if errors persist
              // this.dispose(scene); // Or just stop updating?
+        }
+    }
+
+    /**
+     * Changes the cloud system's mood parameters without full reinitialization
+     * @param {string} newMood - The new mood name
+     * @param {object} newSettings - The new mood settings
+     * @param {number} transitionTime - Time in seconds for the transition
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration for the new mood
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
+        if (!this.instanceMaterial || !newSettings) return;
+        console.log(`VCClouds: Changing mood to '${newMood}'... Config:`, moodConfig);
+        
+        try {
+            // Store new base settings and 0-100 config
+            this.baseSettings = { ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
+            this.currentMood = newMood;
+            
+            // Apply mood config with transition time
+            this._applyMoodConfig(transitionTime);
+            
+            // Update mood colors
+            if (newSettings.colors && this.instanceMaterial.uniforms.uMoodColors) {
+                const moodColors = newSettings.colors.map(c => new THREE.Color(c));
+                this.instanceMaterial.uniforms.uMoodColors.value = moodColors;
+            }
+            
+            // Update fog color if changed
+            if (newSettings.fogColor && this.instanceMaterial.uniforms.uFogColor) {
+                this.instanceMaterial.uniforms.uFogColor.value = new THREE.Color(newSettings.fogColor);
+            }
+            
+            // Note: For major changes like instance count, a full reinit is needed
+            if (this.currentTargetInstanceCount !== this.cloudInstances.count) {
+                console.log(`VCClouds: Instance count change required (${this.cloudInstances.count} -> ${this.currentTargetInstanceCount}). Consider re-initializing.`);
+                // The calling system would need to re-init this module
+            }
+            
+            console.log(`VCClouds: Mood changed to '${newMood}'`);
+        } catch (error) {
+            console.error("VCClouds: Error changing mood:", error);
         }
     }
 

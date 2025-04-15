@@ -42,7 +42,84 @@ class VCWater {
         };
         this.noiseTime = Math.random() * 100; // Unique noise offset per session
 
+        // --- Volume/Occurrence/Intensity Config ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {}; // Store base settings from data.js
+
         console.log(`${this.MODULE_ID} module created`);
+    }
+
+    /**
+     * Maps a value from 0-100 range to a target range
+     * @param {number} value0to100 - Input value in 0-100 range
+     * @param {number} minTarget - Minimum target value
+     * @param {number} maxTarget - Maximum target value
+     * @returns {number} - Mapped value in target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the mood configuration parameters (volume/occurrence/intensity)
+     * @param {number} transitionTime - Time to transition in seconds (if applicable)
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig) return; // Check if config exists
+
+        console.log(`${this.MODULE_ID}: Applying mood config:`, this.moodConfig);
+
+        // --- Volume: Not applicable for visual modules ---
+
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            // For water, occurrence controls plane visibility
+            if (this.waterMesh) {
+                // Hide water if occurrence is very low
+                const shouldBeVisible = this.moodConfig.occurrence > 15;
+                if (this.waterMesh.visible !== shouldBeVisible) {
+                    this.waterMesh.visible = shouldBeVisible;
+                    console.log(`${this.MODULE_ID}: Water visibility set to ${shouldBeVisible}`);
+                }
+            }
+            
+            // Could also scale the size based on occurrence, but would require recreating geometry
+            // const baseSize = this.baseSettings.PLANE_SIZE || this.PLANE_SIZE;
+            // this.PLANE_SIZE = this._mapValue(this.moodConfig.occurrence, baseSize * 0.6, baseSize);
+        }
+
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // Wave height - affects how tall waves can get
+            const baseWaveHeight = this.baseSettings.BASE_WAVE_HEIGHT || this.BASE_WAVE_HEIGHT;
+            this.BASE_WAVE_HEIGHT = this._mapValue(this.moodConfig.intensity, baseWaveHeight * 0.5, baseWaveHeight * 2.0);
+            
+            // Max wave height multiplier - affects audio reactivity
+            const baseHeightMult = this.baseSettings.MAX_WAVE_HEIGHT_MULT || this.MAX_WAVE_HEIGHT_MULT;
+            this.MAX_WAVE_HEIGHT_MULT = this._mapValue(this.moodConfig.intensity, baseHeightMult * 0.5, baseHeightMult * 1.5);
+            
+            // Choppiness - affects wave frequency and sharpness
+            const baseChoppiness = this.baseSettings.BASE_CHOPPINESS || this.BASE_CHOPPINESS;
+            this.BASE_CHOPPINESS = this._mapValue(this.moodConfig.intensity, baseChoppiness * 0.7, baseChoppiness * 2.0);
+            
+            // Reflection distortion - affects how much reflections are distorted
+            const baseDistortion = this.baseSettings.REFLECTION_DISTORTION || this.REFLECTION_DISTORTION;
+            this.REFLECTION_DISTORTION = this._mapValue(this.moodConfig.intensity, baseDistortion * 0.5, baseDistortion * 2.5);
+            
+            // Update material uniforms if available
+            if (this.material && this.material.uniforms) {
+                // Apply to uniforms so they take effect immediately
+                this.material.uniforms.uBaseWaveHeight.value = this.BASE_WAVE_HEIGHT;
+                this.material.uniforms.uMaxWaveHeightMult.value = this.MAX_WAVE_HEIGHT_MULT;
+                this.material.uniforms.uBaseChoppiness.value = this.BASE_CHOPPINESS;
+                this.material.uniforms.uReflectionDistortion.value = this.REFLECTION_DISTORTION;
+            }
+        }
     }
 
     /**
@@ -50,8 +127,9 @@ class VCWater {
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
      * @param {string} mood - The current mood string.
+     * @param {object} moodConfig - Optional mood config with volume/occurrence/intensity values.
      */
-    init(scene, settings, mood) {
+    init(scene, settings, mood, moodConfig) {
         // --- Pre-checks ---
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error(`${this.MODULE_ID}: Scene, settings, settings.colors, or THREE library missing for initialization.`);
@@ -65,9 +143,24 @@ class VCWater {
 
         // --- Cleanup ---
         this.dispose(scene); // Dispose previous instances first
-        console.log(`${this.MODULE_ID}: Initializing for mood '${this.currentMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${this.currentMood}'... Config:`, moodConfig);
 
         try {
+            // Store base settings and mood config
+            this.baseSettings = { ...settings, 
+                PLANE_SIZE: this.PLANE_SIZE,
+                PLANE_SEGMENTS: this.PLANE_SEGMENTS,
+                BASE_WAVE_HEIGHT: this.BASE_WAVE_HEIGHT,
+                MAX_WAVE_HEIGHT_MULT: this.MAX_WAVE_HEIGHT_MULT,
+                BASE_CHOPPINESS: this.BASE_CHOPPINESS,
+                REFLECTION_DISTORTION: this.REFLECTION_DISTORTION,
+                WATER_DEPTH_COLOR_FACTOR: this.WATER_DEPTH_COLOR_FACTOR
+            };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
+            
+            // Apply mood config before creating any geometry
+            this._applyMoodConfig(0); // Apply immediately (no transition)
+
             // --- Geometry ---
             // Use decent segments for smooth waves, but adjustable based on performance needs
             const segments = Math.max(32, Math.min(128, this.PLANE_SEGMENTS)); // Clamp segments
@@ -85,6 +178,12 @@ class VCWater {
             this.waterMesh.position.y = -7.8; // Position slightly below origin (adjust based on landscape)
             this.waterMesh.receiveShadow = true; // Water can receive shadows
             this.waterMesh.userData = { module: this.MODULE_ID };
+
+            // Apply visibility based on occurrence (happens in _applyMoodConfig, but ensure it's set initially)
+            if (this.moodConfig.occurrence < 15) {
+                this.waterMesh.visible = false;
+                console.log(`${this.MODULE_ID}: Water hidden due to low occurrence value (${this.moodConfig.occurrence}/100)`);
+            }
 
             scene.add(this.waterMesh);
             this.objects.push(this.waterMesh);
@@ -364,6 +463,69 @@ class VCWater {
     }
 
     /**
+     * Changes the water system for a new mood.
+     * @param {string} newMood - The new mood string.
+     * @param {object} newSettings - The new mood-specific settings.
+     * @param {number} transitionTime - The transition time in seconds.
+     * @param {object} moodConfig - The new mood configuration with volume/occurrence/intensity.
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
+        if (!this.isEnabled || !this.material) return;
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}'... Config:`, moodConfig);
+
+        try {
+            // Store new settings and config
+            this.baseSettings = { 
+                ...newSettings,
+                PLANE_SIZE: this.PLANE_SIZE,
+                PLANE_SEGMENTS: this.PLANE_SEGMENTS,
+                BASE_WAVE_HEIGHT: this.BASE_WAVE_HEIGHT,
+                MAX_WAVE_HEIGHT_MULT: this.MAX_WAVE_HEIGHT_MULT,
+                BASE_CHOPPINESS: this.BASE_CHOPPINESS,
+                REFLECTION_DISTORTION: this.REFLECTION_DISTORTION,
+                WATER_DEPTH_COLOR_FACTOR: this.WATER_DEPTH_COLOR_FACTOR
+            };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
+            this.currentMood = newMood;
+
+            // Apply new mood config with transition
+            this._applyMoodConfig(transitionTime);
+
+            // --- Update Colors for New Mood ---
+            const moodColors = newSettings.colors.map(c => new THREE.Color(c));
+            let waterBaseColor = moodColors[0] || new THREE.Color(0x1a5276);
+            let skyColor = moodColors[moodColors.length - 1] || new THREE.Color(0xd6eaf8);
+
+            // Adjust colors for specific moods if needed
+            if (this.currentMood === 'cosmic') {
+                waterBaseColor = moodColors[1] || new THREE.Color(0x8e44ad);
+                skyColor = moodColors[3] || new THREE.Color(0xbb8fce);
+            } else if (this.currentMood === 'warm') {
+                waterBaseColor = moodColors[2] || new THREE.Color(0xf1948a);
+                skyColor = moodColors[0] || new THREE.Color(0xe74c3c);
+            }
+
+            // Update material uniforms with new colors
+            const uniforms = this.material.uniforms;
+            uniforms.uWaterBaseColor.value.copy(waterBaseColor);
+            uniforms.uSkyColor.value.copy(skyColor);
+
+            // Update fog color if it changed
+            if (newSettings.fogColor) {
+                uniforms.uFogColor.value.set(newSettings.fogColor);
+            }
+
+            console.log(`${this.MODULE_ID}: Mood parameters updated for '${newMood}'.`);
+
+        } catch (error) {
+            console.error(`${this.MODULE_ID}: Error during mood change:`, error);
+            if (typeof ToastSystem !== 'undefined') {
+                ToastSystem.notify('error', `Water system failed to change mood: ${error.message}`);
+            }
+        }
+    }
+
+    /**
      * Updates the water system uniforms based on time and visual parameters.
      * @param {number} time - The current time elapsed.
      * @param {object} visualParams - The visual parameters object from AudioVisualConnector.
@@ -387,6 +549,14 @@ class VCWater {
             this.smoothedParams.waterWaveHeight = THREE.MathUtils.lerp(this.smoothedParams.waterWaveHeight, visualParams.waterWaveHeight || 1.0, smoothFactor);
             this.smoothedParams.waterRippleStrength = THREE.MathUtils.lerp(this.smoothedParams.waterRippleStrength, visualParams.waterRippleStrength || 0.0, smoothFactor);
 
+            // --- Apply mood config intensity to wave height ---
+            // Scale waterWaveHeight based on intensity
+            let waveHeightScaled = this.smoothedParams.waterWaveHeight;
+            if (this.moodConfig.intensity !== undefined) {
+                // Intensity affects wave height scaling (higher intensity = more dramatic waves)
+                const intensityFactor = this._mapValue(this.moodConfig.intensity, 0.7, 1.3);
+                waveHeightScaled *= intensityFactor;
+            }
 
             // --- Update Shader Uniforms ---
             const uniforms = this.material.uniforms;
@@ -401,7 +571,7 @@ class VCWater {
             uniforms.uPeakImpact.value = this.smoothedParams.peakImpact;
             uniforms.uRawBass.value = this.smoothedParams.rawBass;
             uniforms.uRawMid.value = this.smoothedParams.rawMid;
-            uniforms.uWaterWaveHeightParam.value = this.smoothedParams.waterWaveHeight;
+            uniforms.uWaterWaveHeightParam.value = waveHeightScaled; // Use the intensity-scaled value
             uniforms.uWaterRippleStrengthParam.value = this.smoothedParams.waterRippleStrength;
 
             // Update camera position
