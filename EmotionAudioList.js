@@ -10,13 +10,13 @@ const EmotionAudioModules = {
         // Pads & Drones (Gentle, Sustained)
 
 
-        { module: 'ae_pads', volume: 65, occurrence: 60, intensity: 40 },
+        // { module: 'ae_pads', volume: 65, occurrence: 60, intensity: 40 },
 
-        { module: 'ae_padSoftString', volume: 90, occurrence: 60, intensity: 50 },
+        // { module: 'ae_padSoftString', volume: 90, occurrence: 60, intensity: 50 },
 
-        { module: 'ae_padWarmAnalog', volume: 80, occurrence: 40, intensity: 60 },
+        // { module: 'ae_padWarmAnalog', volume: 80, occurrence: 40, intensity: 60 },
 
-        { module: 'ae_bassSubSine', volume: 40, occurrence: 35, intensity: 20 },
+        // { module: 'ae_bassSubSine', volume: 40, occurrence: 35, intensity: 20 },
 
         // // Melody (Sparse, Soft)
 
