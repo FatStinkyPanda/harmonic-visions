@@ -17,12 +17,20 @@ class VCParticles {
         this.BASE_POINT_SIZE = 0.1;     // Base size in shader units
         this.MAX_POINT_SIZE_MULT = 3.0; // Max size multiplier based on attributes/audio
 
+        // --- Module identifier ---
+        this.MODULE_ID = 'VCParticles'; // For logging and identification
+        
+        // --- Volume/Occurrence/Intensity Configuration ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {}; // Store base settings from data.js
+
         // --- State ---
         this.particles = null;          // THREE.Points object
         this.geometry = null;           // THREE.BufferGeometry
         this.material = null;           // THREE.ShaderMaterial
         this.objects = [];              // Tracks all THREE objects for disposal
         this.currentMood = 'calm';      // Track the current mood
+        this.scene = null;              // Store scene reference for reinitialization
 
         // --- Internal Animation/Reactivity State ---
         this.smoothedParams = {         // Store smoothed visual parameters locally
@@ -42,12 +50,65 @@ class VCParticles {
     }
 
     /**
+     * Maps a value from 0-100 range to a target range.
+     * @param {number} value0to100 - The input value (0-100)
+     * @param {number} minTarget - The minimum target value
+     * @param {number} maxTarget - The maximum target value
+     * @returns {number} The mapped value
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+    
+    /**
+     * Applies the mood configuration (0-100 values for volume, occurrence, intensity)
+     * @param {number} transitionTime - Time in seconds for smooth transitions
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig) return; // Check if config exists
+
+        // --- Apply Occurrence (Particle Count) ---
+        if (this.moodConfig.occurrence !== undefined) {
+            // Map occurrence to particle count
+            const baseCount = this.BASE_PARTICLE_COUNT;
+            const maxCount = this.MAX_PARTICLE_COUNT;
+            const targetCount = Math.floor(this._mapValue(this.moodConfig.occurrence, 0, maxCount));
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> targetCount ${targetCount}`);
+            
+            // Store the target count for use in init/changeMood
+            this.targetParticleCount = targetCount;
+        }
+
+        // --- Apply Intensity (Visual parameters) ---
+        if (this.moodConfig.intensity !== undefined && this.material) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // Map intensity to point size multiplier
+            const basePointSizeMult = 1.0;
+            const maxPointSizeMult = this.MAX_POINT_SIZE_MULT;
+            const targetPointSizeMult = this._mapValue(this.moodConfig.intensity, basePointSizeMult, maxPointSizeMult);
+            console.log(`  -> Point Size Multiplier: ${targetPointSizeMult.toFixed(2)}`);
+            
+            // Update shader uniform
+            if (this.material.uniforms.uMaxPointSizeMult) {
+                this.material.uniforms.uMaxPointSizeMult.value = targetPointSizeMult;
+            }
+        }
+        
+        // Note: Volume doesn't apply to visual modules
+    }
+
+    /**
      * Initializes the particle system based on the current mood settings.
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
      * @param {string} mood - The current mood string.
+     * @param {object} moodConfig - The mood-specific volume/occurrence/intensity config
      */
-    init(scene, settings, mood) {
+    init(scene, settings, mood, moodConfig) {
         // --- Pre-checks ---
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error("VCParticles: Scene, settings, settings.colors, or THREE library missing for initialization.");
@@ -57,21 +118,33 @@ class VCParticles {
             return;
         }
         this.currentMood = mood || 'calm';
+        this.scene = scene; // Store scene reference for later use
         const complexity = settings.complexity || 0.5;
+        
+        // Store base settings and mood config
+        this.baseSettings = { ...settings };
+        this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
+        console.log(`${this.MODULE_ID}: Initializing for mood '${this.currentMood}'... Config:`, this.moodConfig);
 
         // --- Cleanup ---
         this.dispose(scene);
-        console.log(`VCParticles: Initializing for mood '${this.currentMood}'...`);
 
         try {
+            // Apply mood config to calculate parameters
+            this._applyMoodConfig(0); // Apply immediately (no transition)
+            
             // --- Determine Particle Count ---
-            const particleCount = Math.floor(
-                THREE.MathUtils.lerp(
-                    this.BASE_PARTICLE_COUNT,
-                    this.MAX_PARTICLE_COUNT,
-                    complexity * complexity // Square complexity for more pronounced difference
-                )
-            );
+            // Use occurrence-based particle count if available, otherwise use complexity-based calculation
+            let particleCount = this.targetParticleCount;
+            if (!particleCount) {
+                particleCount = Math.floor(
+                    THREE.MathUtils.lerp(
+                        this.BASE_PARTICLE_COUNT,
+                        this.MAX_PARTICLE_COUNT,
+                        complexity * complexity // Square complexity for more pronounced difference
+                    )
+                );
+            }
             console.log(`VCParticles: Particle count: ${particleCount}`);
             if (particleCount <= 0) {
                 console.warn("VCParticles: Particle count is zero, skipping initialization.");
@@ -135,6 +208,15 @@ class VCParticles {
             if (!this.material) {
                 throw new Error("Failed to create particle material.");
             }
+            
+            // Apply intensity to material after creation
+            if (this.moodConfig.intensity !== undefined) {
+                const basePointSizeMult = 1.0;
+                const maxPointSizeMult = this.MAX_POINT_SIZE_MULT;
+                const targetPointSizeMult = this._mapValue(this.moodConfig.intensity, basePointSizeMult, maxPointSizeMult);
+                this.material.uniforms.uMaxPointSizeMult.value = targetPointSizeMult;
+            }
+            
             this.objects.push(this.material); // Track material
 
             // --- Points Object ---
@@ -377,6 +459,75 @@ class VCParticles {
                 return 3.0; // Nebulous/Slow Swirl
             default:
                 return 0.0;
+        }
+    }
+
+    /**
+     * Changes the particle system to reflect a new mood.
+     * @param {string} newMood - The new mood string.
+     * @param {object} newSettings - The mood-specific settings object from data.js.
+     * @param {number} transitionTime - Time in seconds for the transition.
+     * @param {object} moodConfig - The mood-specific volume/occurrence/intensity config.
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
+        if (!this.particles || !this.material || !newSettings || !newMood) {
+            console.error(`${this.MODULE_ID}: Missing parameters or not initialized for changeMood.`);
+            return;
+        }
+        
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}'... Config:`, moodConfig);
+        
+        // Store new base settings and mood config
+        this.baseSettings = { ...newSettings };
+        this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
+        
+        try {
+            // Apply new mood config with transition
+            this._applyMoodConfig(transitionTime);
+            
+            // Check if we need to recreate particles due to occurrence change
+            const oldParticleCount = this.geometry ? this.geometry.attributes.position.count : 0;
+            const newParticleCount = this.targetParticleCount;
+            
+            // If particle count changed significantly or mood type is very different
+            // (which might need different particle behaviors), reinitialize
+            const oldMoodType = this.material.uniforms.uMoodType.value;
+            const newMoodType = this._getParticleTypeForMood(newMood);
+            const countDifferenceRatio = oldParticleCount > 0 ? Math.abs(newParticleCount - oldParticleCount) / oldParticleCount : 1;
+            
+            if (countDifferenceRatio > 0.25 || Math.abs(oldMoodType - newMoodType) >= 1.0) {
+                console.log(`${this.MODULE_ID}: Significant changes detected, reinitializing particles.`);
+                if (this.scene) {
+                    this.init(this.scene, newSettings, newMood, this.moodConfig);
+                } else {
+                    console.error(`${this.MODULE_ID}: Cannot reinitialize - scene reference missing`);
+                }
+                return;
+            }
+            
+            // Update current mood state
+            this.currentMood = newMood;
+            
+            // Otherwise, just update the material for the transition
+            // Update mood type
+            this.material.uniforms.uMoodType.value = newMoodType;
+            
+            // Update fog parameters if needed
+            if (newSettings.fogColor) {
+                this.material.uniforms.uFogColor.value.set(newSettings.fogColor);
+            }
+            if (newSettings.cameraDistance) {
+                this.material.uniforms.uFogNear.value = newSettings.cameraDistance + 20;
+                this.material.uniforms.uFogFar.value = newSettings.cameraDistance + this.SPAWN_VOLUME_RADIUS * 1.8;
+            }
+            
+            console.log(`${this.MODULE_ID}: Mood updated to '${newMood}'.`);
+            
+        } catch (error) {
+            console.error(`${this.MODULE_ID}: Error during mood change to '${newMood}':`, error);
+            if (typeof ToastSystem !== 'undefined') {
+                ToastSystem.notify('error', `Particle system failed to update: ${error.message}`);
+            }
         }
     }
 

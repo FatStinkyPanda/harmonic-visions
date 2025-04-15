@@ -49,7 +49,115 @@ class VCDreamEffects {
         };
         this.noiseTime = Math.random() * 100; // Unique noise offset per session
 
+        // --- VoI Config ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {}; // Store base settings from data.js
+        this.targetOrbCount = 0; // Used for occurrence mapping
+        this.targetFloaterCount = 0; // Used for occurrence mapping
+
         console.log("VCDreamEffects module created");
+    }
+
+    /**
+     * Maps a value from 0-100 scale to a target range
+     * @param {number} value0to100 - The value on a 0-100 scale
+     * @param {number} minTarget - The target range minimum
+     * @param {number} maxTarget - The target range maximum
+     * @returns {number} The mapped value in the target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the 0-100 configuration values to the effect parameters
+     * @param {number} transitionTime - Time in seconds for parameter transitions
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig) return; // Make sure we have config
+
+        // --- Apply Volume (Visibility) ---
+        if (this.moodConfig.volume !== undefined) {
+            // Volume affects the global intensity (brightness/opacity)
+            const baseGlobalIntensity = this.baseSettings.globalIntensity || 1.0;
+            const targetIntensity = this._mapValue(this.moodConfig.volume, 0.0, baseGlobalIntensity);
+            console.log(`VCDreamEffects: Applying Volume ${this.moodConfig.volume}/100 -> globalIntensity ${targetIntensity.toFixed(2)}`);
+            
+            if (this.orbMaterial && this.orbMaterial.uniforms) {
+                this.orbMaterial.uniforms.uGlobalIntensity.value = targetIntensity;
+            }
+            if (this.floaterMaterial && this.floaterMaterial.uniforms) {
+                this.floaterMaterial.uniforms.uGlobalIntensity.value = targetIntensity;
+            }
+        }
+
+        // --- Apply Occurrence (Number of Elements) ---
+        if (this.moodConfig.occurrence !== undefined) {
+            // Occurrence affects the number of orbs and floaters
+            // Note: Changes to count require recreating the instancedMesh, so we store for init/changeMood
+            
+            // For orb count
+            const baseOrbCount = this.ORB_COUNT_BASE;
+            const maxOrbCount = baseOrbCount + this.ORB_COUNT_COMPLEXITY_FACTOR;
+            this.targetOrbCount = Math.floor(this._mapValue(this.moodConfig.occurrence, 0, maxOrbCount));
+            
+            // For floater count
+            const baseFloaterCount = this.FLOATER_COUNT_BASE;
+            const maxFloaterCount = baseFloaterCount + this.FLOATER_COUNT_COMPLEXITY_FACTOR;
+            this.targetFloaterCount = Math.floor(this._mapValue(this.moodConfig.occurrence, 0, maxFloaterCount));
+            
+            console.log(`VCDreamEffects: Applying Occurrence ${this.moodConfig.occurrence}/100 -> targetCounts: ${this.targetOrbCount} orbs, ${this.targetFloaterCount} floaters`);
+            
+            // Actual count change happens in init or changeMood since it requires structure change
+        }
+
+        // --- Apply Intensity (Effect Strength) ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`VCDreamEffects: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // Intensity affects dreaminess and fluidity
+            
+            // Dreaminess parameter - maps intensity to 0.1-1.0 
+            const baseDreaminess = this.baseSettings.baseDreaminess || 0.1;
+            const maxDreaminess = this.baseSettings.maxDreaminess || 1.0;
+            const targetDreaminess = this._mapValue(this.moodConfig.intensity, baseDreaminess, maxDreaminess);
+            console.log(`  -> Dreaminess: ${targetDreaminess.toFixed(2)}`);
+            
+            // Fluidity parameter - maps intensity to 0.1-1.0
+            const baseFluidity = this.baseSettings.baseFluidity || 0.1;
+            const maxFluidity = this.baseSettings.maxFluidity || 1.0;
+            const targetFluidity = this._mapValue(this.moodConfig.intensity, baseFluidity, maxFluidity);
+            console.log(`  -> Fluidity: ${targetFluidity.toFixed(2)}`);
+            
+            // Drift speed - subtle increase with intensity
+            const baseDriftSpeed = this.baseSettings.baseDriftSpeed || this.ORB_DRIFT_SPEED;
+            const maxDriftSpeed = this.baseSettings.maxDriftSpeed || (this.ORB_DRIFT_SPEED * 2.0);
+            const targetDriftSpeed = this._mapValue(this.moodConfig.intensity, baseDriftSpeed, maxDriftSpeed);
+            console.log(`  -> Drift Speed: ${targetDriftSpeed.toFixed(3)}`);
+            
+            // Apply these values to shader uniforms
+            if (this.orbMaterial && this.orbMaterial.uniforms) {
+                this.orbMaterial.uniforms.uDreaminess.value = targetDreaminess;
+                this.orbMaterial.uniforms.uFluidity.value = targetFluidity;
+                this.orbMaterial.uniforms.uDriftSpeed.value = targetDriftSpeed;
+            }
+            
+            if (this.floaterMaterial && this.floaterMaterial.uniforms) {
+                this.floaterMaterial.uniforms.uDreaminess.value = targetDreaminess;
+                
+                // For rotation speed (if applicable)
+                const baseRotationSpeed = this.baseSettings.baseRotationSpeed || this.FLOATER_ROTATION_SPEED;
+                const maxRotationSpeed = this.baseSettings.maxRotationSpeed || (this.FLOATER_ROTATION_SPEED * 2.0);
+                const targetRotationSpeed = this._mapValue(this.moodConfig.intensity, baseRotationSpeed, maxRotationSpeed);
+                
+                if (this.floaterMaterial.uniforms.uRotationSpeed) {
+                    this.floaterMaterial.uniforms.uRotationSpeed.value = targetRotationSpeed;
+                }
+            }
+        }
     }
 
     /**
@@ -57,8 +165,9 @@ class VCDreamEffects {
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
      * @param {string} mood - The current mood string.
+     * @param {object} moodConfig - The 0-100 configuration values for volume, occurrence, intensity.
      */
-    init(scene, settings, mood) {
+    init(scene, settings, mood, moodConfig) {
         // --- Pre-checks ---
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error("VCDreamEffects: Scene, settings, settings.colors, or THREE library missing for initialization.");
@@ -69,17 +178,24 @@ class VCDreamEffects {
 
         // --- Cleanup ---
         this.dispose(scene);
-        console.log(`VCDreamEffects: Initializing for mood '${this.currentMood}'...`);
+        console.log(`VCDreamEffects: Initializing for mood '${this.currentMood}'... Config:`, moodConfig);
 
         try {
-            const complexity = settings.complexity || 0.5; // Default complexity
+            // Store base settings and config
+            this.baseSettings = { ...settings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config with defaults
+            
+            // --- Apply Mood Config First ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
+            
+            // --- Determine Counts Based on Mood Config ---
+            const orbCount = this.targetOrbCount || Math.floor(this.ORB_COUNT_BASE + this.ORB_COUNT_COMPLEXITY_FACTOR * (settings.complexity || 0.5));
+            const floaterCount = this.targetFloaterCount || Math.floor(this.FLOATER_COUNT_BASE + this.FLOATER_COUNT_COMPLEXITY_FACTOR * (settings.complexity || 0.5));
 
             // --- Create Glowing Orbs ---
-            const orbCount = Math.floor(this.ORB_COUNT_BASE + this.ORB_COUNT_COMPLEXITY_FACTOR * complexity);
             this._createGlowingOrbs(scene, settings, orbCount);
 
             // --- Create Floating Geometry ---
-            const floaterCount = Math.floor(this.FLOATER_COUNT_BASE + this.FLOATER_COUNT_COMPLEXITY_FACTOR * complexity);
             this._createFloatingGeometry(scene, settings, floaterCount);
 
             console.log(`VCDreamEffects: Initialized successfully for mood '${this.currentMood}' with ${orbCount} orbs and ${floaterCount} floaters.`);
@@ -88,6 +204,89 @@ class VCDreamEffects {
             console.error(`VCDreamEffects: Error during initialization for mood '${this.currentMood}':`, error);
             if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Dream Effects failed to initialize: ${error.message}`);
             this.dispose(scene); // Cleanup partial initialization
+        }
+    }
+
+    /**
+     * Changes the dream effects to match a new mood.
+     * @param {THREE.Scene} scene - The main Three.js scene.
+     * @param {object} newSettings - The new mood-specific settings object from data.js.
+     * @param {string} newMood - The new mood string.
+     * @param {number} transitionTime - Time in seconds for the transition.
+     * @param {object} moodConfig - The 0-100 configuration values for volume, occurrence, intensity.
+     */
+    changeMood(scene, newSettings, newMood, transitionTime, moodConfig) {
+        if (!scene || !newSettings) {
+            console.error("VCDreamEffects: Scene or settings missing for mood change.");
+            return;
+        }
+        
+        console.log(`VCDreamEffects: Changing mood to '${newMood}'... Config:`, moodConfig);
+        
+        try {
+            // Store the old count values for comparison
+            const oldOrbCount = this.targetOrbCount || (this.glowingOrbs ? this.glowingOrbs.count : 0);
+            const oldFloaterCount = this.targetFloaterCount || (this.floatingGeometry ? this.floatingGeometry.count : 0);
+            
+            // Update settings and config
+            this.baseSettings = { ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
+            this.currentMood = newMood;
+            
+            // Apply new config with transition time
+            this._applyMoodConfig(transitionTime);
+            
+            // Check if count has changed significantly (>10% difference)
+            const newOrbCount = this.targetOrbCount;
+            const newFloaterCount = this.targetFloaterCount;
+            
+            const orbCountChanged = Math.abs(newOrbCount - oldOrbCount) > oldOrbCount * 0.1;
+            const floaterCountChanged = Math.abs(newFloaterCount - oldFloaterCount) > oldFloaterCount * 0.1;
+            
+            // If counts changed significantly, recreate the meshes
+            if (orbCountChanged || floaterCountChanged) {
+                console.log(`VCDreamEffects: Significant count change detected. Recreating instances.`);
+                console.log(`  Orbs: ${oldOrbCount} -> ${newOrbCount}, Floaters: ${oldFloaterCount} -> ${newFloaterCount}`);
+                
+                // Cleanup existing meshes but keep materials
+                if (this.glowingOrbs && scene.contains(this.glowingOrbs)) {
+                    scene.remove(this.glowingOrbs);
+                    this.glowingOrbs.dispose();
+                    this.glowingOrbs = null;
+                }
+                
+                if (this.floatingGeometry && scene.contains(this.floatingGeometry)) {
+                    scene.remove(this.floatingGeometry);
+                    this.floatingGeometry.dispose();
+                    this.floatingGeometry = null;
+                }
+                
+                // Recreate with new counts
+                this._createGlowingOrbs(scene, newSettings, newOrbCount);
+                this._createFloatingGeometry(scene, newSettings, newFloaterCount);
+                
+            } else {
+                console.log(`VCDreamEffects: Using existing instances with new parameters. `);
+                
+                // Update materials if colors or other visual properties changed
+                if (this.orbMaterial) {
+                    const moodColors = newSettings.colors.map(c => new THREE.Color(c));
+                    this.orbMaterial.uniforms.uMoodColors.value = moodColors;
+                    this.orbMaterial.uniforms.uFogColor.value = new THREE.Color(newSettings.fogColor || '#000000');
+                }
+                
+                if (this.floaterMaterial) {
+                    const moodColors = newSettings.colors.map(c => new THREE.Color(c));
+                    this.floaterMaterial.uniforms.uMoodColors.value = moodColors;
+                    this.floaterMaterial.uniforms.uFogColor.value = new THREE.Color(newSettings.fogColor || '#000000');
+                }
+            }
+            
+            console.log(`VCDreamEffects: Mood changed to '${newMood}'.`);
+            
+        } catch (error) {
+            console.error(`VCDreamEffects: Error during mood change to '${newMood}':`, error);
+            if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Dream Effects mood change failed: ${error.message}`);
         }
     }
 
@@ -392,13 +591,6 @@ class VCDreamEffects {
                     alpha += fresnel * 0.3 * uGlobalIntensity; // Additive alpha for rim
                     alpha = clamp(alpha, 0.0, 0.8); // Clamp max alpha
 
-                    // // --- Apply Fog ---
-                    // float depth = gl_FragCoord.z / gl_FragCoord.w;
-                    // float fogFactor = smoothstep(uFogNear, uFogFar, depth);
-
-                    // // --- Output ---
-                    // gl_FragColor = vec4(mix(finalColor, uFogColor, fogFactor), alpha);
-
                     // --- New Final Output ---
                     gl_FragColor = vec4(finalColor, alpha); // Output color/alpha, Three.js adds fog
 
@@ -448,7 +640,6 @@ class VCDreamEffects {
                  attribute float baseScale;
 
                  varying vec3 vNormal;
-                //  varying vec2 vUv; //causing errors
                  varying float vNoiseFactor; // For subtle fragment variations
                  varying vec2 vUv;
 
@@ -538,13 +729,6 @@ class VCDreamEffects {
 
                      // --- Combine ---
                      vec3 finalColor = dreamColor * lighting + emissive;
-
-                    //  // --- Apply Fog ---
-                    //  float depth = gl_FragCoord.z / gl_FragCoord.w;
-                    //  float fogFactor = smoothstep(uFogNear, uFogFar, depth);
-
-                    //  // --- Output ---
-                    //  gl_FragColor = vec4(mix(finalColor, uFogColor, fogFactor), 1.0); // Opaque floaters
 
                     // --- New Final Output ---
                     gl_FragColor = vec4(finalColor, 1.0); // Output color, Three.js adds fog

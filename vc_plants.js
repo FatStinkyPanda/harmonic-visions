@@ -45,7 +45,114 @@ class VCPlants {
         };
         this.noiseTime = Math.random() * 500; // Unique noise offset
 
+        // --- Volume/Occurrence/Intensity Config ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {}; // Store base settings from data.js
+        this.defaultPlantSettings = { // Default fallback settings
+            plantOpacity: 1.0,
+            swaySpeedBase: this.SWAY_SPEED_BASE,
+            swayIntensityBase: this.SWAY_INTENSITY_BASE,
+            heightBase: this.BASE_PLANT_HEIGHT,
+            heightVariation: this.HEIGHT_VARIATION,
+            widthBase: this.BASE_PLANT_WIDTH,
+            widthVariation: this.WIDTH_VARIATION,
+            // Base/max values for intensity mapping
+            swayIntensityMin: 0.02,
+            swayIntensityMax: 0.15,
+            plantHeightMin: 0.7, // Minimum height factor
+            plantHeightMax: 1.5 // Maximum height factor (relative to base)
+        };
+
         console.log(`${this.MODULE_ID} module created`);
+    }
+
+    /**
+     * Maps a value from 0-100 scale to a target range.
+     * @param {number} value0to100 - Input value (0-100)
+     * @param {number} minTarget - Minimum target value
+     * @param {number} maxTarget - Maximum target value
+     * @returns {number} - Mapped value in the target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the mood configuration (volume, occurrence, intensity) to the module.
+     * @param {number} transitionTime - Transition time in seconds.
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.isEnabled || !this.material) return;
+
+        console.log(`${this.MODULE_ID}: Applying mood config: volume=${this.moodConfig.volume}, occurrence=${this.moodConfig.occurrence}, intensity=${this.moodConfig.intensity}`);
+        
+        // --- Apply Volume (Visual equivalent: opacity) ---
+        if (this.moodConfig.volume !== undefined) {
+            // For plants, volume controls opacity
+            const baseOpacity = this.baseSettings.plantOpacity ?? this.defaultPlantSettings.plantOpacity;
+            const targetOpacity = this._mapValue(this.moodConfig.volume, 0.1, baseOpacity);
+            
+            // Update material opacity
+            if (this.material && this.material.uniforms) {
+                this.material.uniforms.uOpacity = this.material.uniforms.uOpacity || { value: 1.0 };
+                this.material.uniforms.uOpacity.value = targetOpacity;
+                this.material.transparent = targetOpacity < 0.99;
+                
+                console.log(`  -> Plant opacity: ${targetOpacity.toFixed(2)}`);
+            }
+        }
+        
+        // --- Apply Occurrence (Number of visible plants) ---
+        // This is mainly handled during initialization or changeMood
+        // Here we can adjust existing plant visibility based on occurrence
+        if (this.moodConfig.occurrence !== undefined && this.plants) {
+            // Calculate how many plants should be visible
+            const totalInstances = this.plants.count;
+            const visibleCount = Math.floor(this._mapValue(
+                this.moodConfig.occurrence, 
+                Math.min(10, totalInstances), // Always show at least a few plants
+                totalInstances // Show all plants at 100%
+            ));
+            
+            // We can't easily change instance count of an InstancedMesh,
+            // but we can track visibility and apply a shader feature to hide plants
+            if (this.material && this.material.uniforms) {
+                this.material.uniforms.uVisibleCount = this.material.uniforms.uVisibleCount || { value: totalInstances };
+                this.material.uniforms.uVisibleCount.value = visibleCount;
+                console.log(`  -> Setting ${visibleCount}/${totalInstances} plants visible based on occurrence`);
+            }
+        }
+        
+        // --- Apply Intensity (Size, sway intensity) ---
+        if (this.moodConfig.intensity !== undefined && this.material && this.material.uniforms) {
+            console.log(`  -> Applying intensity: ${this.moodConfig.intensity}/100`);
+            
+            // 1. Sway Intensity - more intense at higher value
+            const swayMin = this.baseSettings.swayIntensityMin ?? this.defaultPlantSettings.swayIntensityMin;
+            const swayMax = this.baseSettings.swayIntensityMax ?? this.defaultPlantSettings.swayIntensityMax;
+            const targetSway = this._mapValue(this.moodConfig.intensity, swayMin, swayMax);
+            this.material.uniforms.uSwayIntensityBase.value = targetSway;
+            console.log(`  -> Sway intensity: ${targetSway.toFixed(3)}`);
+            
+            // 2. Plant Height Factor - taller at higher value
+            const heightMin = this.baseSettings.plantHeightMin ?? this.defaultPlantSettings.plantHeightMin;
+            const heightMax = this.baseSettings.plantHeightMax ?? this.defaultPlantSettings.plantHeightMax;
+            const heightFactor = this._mapValue(this.moodConfig.intensity, heightMin, heightMax);
+            this.material.uniforms.uHeightFactor = this.material.uniforms.uHeightFactor || { value: 1.0 };
+            this.material.uniforms.uHeightFactor.value = heightFactor;
+            console.log(`  -> Height factor: ${heightFactor.toFixed(2)}`);
+            
+            // 3. Color Saturation - more vivid at higher value
+            const satMin = 0.7; // Slightly desaturated at low intensity
+            const satMax = 1.2; // Boost saturation at high intensity
+            const saturation = this._mapValue(this.moodConfig.intensity, satMin, satMax);
+            this.material.uniforms.uSaturationFactor = this.material.uniforms.uSaturationFactor || { value: 1.0 };
+            this.material.uniforms.uSaturationFactor.value = saturation;
+            console.log(`  -> Color saturation: ${saturation.toFixed(2)}`);
+        }
     }
 
     /**
@@ -53,8 +160,9 @@ class VCPlants {
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
      * @param {string} mood - The current mood string.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration for this mood.
      */
-    init(scene, settings, mood) {
+    init(scene, settings, mood, moodConfig) {
         // --- Pre-checks ---
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error(`${this.MODULE_ID}: Scene, settings, settings.colors, or THREE library missing for initialization.`);
@@ -65,17 +173,31 @@ class VCPlants {
         }
         this.currentMood = mood || 'calm';
         const complexity = settings.complexity || 0.5;
+        
+        // Store the specific 0-100 configuration for this mood
+        this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
+        // Store base settings for reference
+        this.baseSettings = { ...this.defaultPlantSettings, ...settings };
 
         // --- Cleanup ---
         this.dispose(scene); // Dispose previous instances first
-        console.log(`${this.MODULE_ID}: Initializing for mood '${this.currentMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${this.currentMood}'... Config:`, this.moodConfig);
 
         try {
-            // --- Determine Instance Count ---
-            const instanceCount = Math.floor(
+            // --- Determine Instance Count Based on Occurrence ---
+            // Calculate base count based on complexity
+            const baseCount = Math.floor(
                 this.BASE_INSTANCE_COUNT + (this.MAX_INSTANCE_COUNT - this.BASE_INSTANCE_COUNT) * complexity
             );
-            console.log(`${this.MODULE_ID}: Instance count: ${instanceCount}`);
+            
+            // Adjust by occurrence from mood config
+            const instanceCount = Math.floor(this._mapValue(
+                this.moodConfig.occurrence, 
+                Math.min(10, baseCount), // Minimum of 10 or baseCount, whichever is smaller
+                baseCount // Maximum count at 100% occurrence
+            ));
+            
+            console.log(`${this.MODULE_ID}: Instance count: ${instanceCount} (base: ${baseCount}, occurrence: ${this.moodConfig.occurrence}%)`);
             if (instanceCount <= 0) {
                 console.warn(`${this.MODULE_ID}: Instance count is zero or less, skipping initialization.`);
                 this.isEnabled = false;
@@ -93,11 +215,11 @@ class VCPlants {
             this.objects.push(this.material);
 
             // --- Instanced Mesh ---
-            this.plants = new THREE.InstancedMesh(this.geometry, this.material, instanceCount);
+            this.plants = new THREE.InstancedMesh(this.geometry, this.material, baseCount); // Create full capacity
             this.plants.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Essential for updates if needed, though shader handles most
 
             // --- Generate Instance Attributes ---
-            this._generateInstanceAttributes(instanceCount, settings);
+            this._generateInstanceAttributes(baseCount, settings);
 
             this.plants.userData = { module: this.MODULE_ID };
             this.plants.castShadow = true; // Plants can cast subtle shadows
@@ -107,6 +229,9 @@ class VCPlants {
             scene.add(this.plants);
             this.objects.push(this.plants);
             this.isEnabled = true; // Mark as enabled after successful init
+            
+            // --- Apply Initial Mood Config ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             console.log(`${this.MODULE_ID}: Initialized successfully for mood '${this.currentMood}'.`);
 
@@ -117,6 +242,65 @@ class VCPlants {
             }
             this.dispose(scene); // Cleanup on error
             this.isEnabled = false;
+        }
+    }
+
+    /**
+     * Changes the current mood settings with a smooth transition.
+     * @param {string} newMood - The new mood name.
+     * @param {object} newSettings - The new mood-specific settings object.
+     * @param {number} transitionTime - Transition time in seconds.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration for this mood.
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
+        if (!this.isEnabled || !this.material || !newSettings) {
+            console.error(`${this.MODULE_ID}: Cannot change mood. Module not enabled or settings missing.`);
+            return;
+        }
+        
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}'... Config:`, moodConfig);
+        
+        try {
+            // Store new base settings and 0-100 config
+            this.baseSettings = { ...this.defaultPlantSettings, ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
+            this.currentMood = newMood;
+            
+            // --- Update Colors ---
+            if (newSettings.colors && this.material.uniforms.uMoodColors) {
+                const moodColors = newSettings.colors.map(c => new THREE.Color(c));
+                this.material.uniforms.uMoodColors.value = moodColors;
+                
+                // Setup color transition flag if supported
+                if (this.material.uniforms.uColorTransition) {
+                    this.material.uniforms.uColorTransition.value = 1.0; // Signal to shader to blend colors
+                    this.material.uniforms.uTransitionStart = this.material.uniforms.uTransitionStart || { value: 0 };
+                    this.material.uniforms.uTransitionStart.value = Date.now() / 1000;
+                    this.material.uniforms.uTransitionDuration = this.material.uniforms.uTransitionDuration || { value: 1.0 };
+                    this.material.uniforms.uTransitionDuration.value = transitionTime;
+                }
+            }
+            
+            // --- Update Fog Settings ---
+            if (newSettings.fogColor && this.material.uniforms.uFogColor) {
+                this.material.uniforms.uFogColor.value = new THREE.Color(newSettings.fogColor);
+            }
+            if (newSettings.cameraDistance && this.material.uniforms.uFogNear && this.material.uniforms.uFogFar) {
+                this.material.uniforms.uFogNear.value = newSettings.cameraDistance;
+                this.material.uniforms.uFogFar.value = newSettings.cameraDistance + this.SPAWN_AREA_WIDTH * 1.2;
+            }
+            
+            // --- Apply Mood Config with Transition ---
+            this._applyMoodConfig(transitionTime);
+            
+            // --- Check if we need to recreate plants due to major occurrence change ---
+            // This is more complex than just updating material uniforms and might require recreating all plants
+            // For simplicity in this implementation, we just update the visibility via uniforms
+            
+            console.log(`${this.MODULE_ID}: Mood parameters updated for '${newMood}'.`);
+            
+        } catch (error) {
+            console.error(`${this.MODULE_ID}: Error during mood change to '${newMood}':`, error);
         }
     }
 
@@ -191,6 +375,15 @@ class VCPlants {
                 // Lighting (Simple)
                 uLightDirection: { value: new THREE.Vector3(0.5, 0.8, 0.3).normalize() },
                 uAmbientLight: { value: 0.3 },
+                // New uniforms for Volume/Occurrence/Intensity
+                uOpacity: { value: 1.0 }, // For volume control
+                uVisibleCount: { value: this.plants ? this.plants.count : 1000 }, // For occurrence control
+                uHeightFactor: { value: 1.0 }, // For intensity control (affects plant height)
+                uSaturationFactor: { value: 1.0 }, // For intensity control (affects color)
+                // Color transition support
+                uColorTransition: { value: 0.0 }, // 0 = no transition, 1 = transition active
+                uTransitionStart: { value: 0.0 }, // When transition started (time)
+                uTransitionDuration: { value: 1.0 }, // Duration in seconds
             },
             vertexShader: `
                 attribute vec3 colorTint; // Receive color tint per instance
@@ -201,6 +394,8 @@ class VCPlants {
                 uniform float uNoiseTime;
                 uniform float uSwaySpeedBase;
                 uniform float uSwayIntensityBase;
+                uniform float uHeightFactor; // New: Additional height scaling from intensity
+                uniform float uVisibleCount; // New: Number of visible instances from occurrence
                 // Audio/Visual Params
                 uniform float uMovementSpeed;
                 uniform float uFluidity; // Affects sway randomness/intensity
@@ -210,6 +405,7 @@ class VCPlants {
                 varying vec3 vColor;
                 varying vec3 vNormal;
                 varying float vWorldHeightFactor; // Pass height factor adjusted by instance scale
+                varying float vInstanceId; // Pass instance ID for visibility check
 
                 // Simple noise function
                 float noise(vec2 p) {
@@ -228,9 +424,12 @@ class VCPlants {
                     vColor = colorTint; // Pass instance color tint
                     float swaySpeedMod = randomFactor.x;
                     float swayPhase = randomFactor.y;
-                    float heightScale = randomFactor.z;
+                    float heightScale = randomFactor.z * uHeightFactor; // Apply intensity height factor
                     float widthScale = randomFactor.w;
                     vWorldHeightFactor = heightFactor * heightScale; // Store world-scaled height factor
+                    
+                    // Get instance ID for visibility check
+                    vInstanceId = float(gl_InstanceID);
 
                     // --- Calculate Sway ---
                     float timeScaled = time * uMovementSpeed;
@@ -281,6 +480,9 @@ class VCPlants {
                 uniform vec3 uMoodColors[5];
                 uniform float uGlobalIntensity;
                 uniform float uDreaminess;
+                uniform float uOpacity; // New: From volume setting
+                uniform float uVisibleCount; // New: For controlling plant visibility based on occurrence
+                uniform float uSaturationFactor; // New: From intensity setting
                 // Fog
                 uniform vec3 uFogColor;
                 uniform float uFogNear;
@@ -288,17 +490,37 @@ class VCPlants {
                 // Lighting
                 uniform vec3 uLightDirection;
                 uniform float uAmbientLight;
+                // Color transition
+                uniform float uColorTransition;
+                uniform float uTransitionStart;
+                uniform float uTransitionDuration;
+                uniform float time;
 
                 varying vec3 vColor; // Instance color tint
                 varying vec3 vNormal;
                 varying float vWorldHeightFactor; // Height factor from base (0) to tip (scaled height)
+                varying float vInstanceId; // Instance ID for visibility check
+
+                // Function to adjust saturation
+                vec3 adjustSaturation(vec3 color, float saturationFactor) {
+                    float gray = dot(color, vec3(0.299, 0.587, 0.114));
+                    return mix(vec3(gray), color, saturationFactor);
+                }
 
                 void main() {
+                    // Check if this instance should be visible based on occurrence
+                    if (vInstanceId >= uVisibleCount) {
+                        discard; // Skip rendering this fragment
+                    }
+                    
                     // --- Calculate Base Color ---
                     // Use instance tint, maybe slightly modify based on height
                     vec3 baseColor = vColor;
                     // Example: slightly darker/desaturated near the base
                     baseColor = mix(baseColor * 0.8, baseColor, smoothstep(0.0, 0.3, vWorldHeightFactor));
+                    
+                    // Apply saturation adjustment from intensity
+                    baseColor = adjustSaturation(baseColor, uSaturationFactor);
 
                     // --- Apply Dreaminess ---
                     // Fade color towards a lighter shade or desaturate
@@ -313,19 +535,17 @@ class VCPlants {
                     // --- Final Color ---
                     vec3 finalColor = dreamColor * lighting * uGlobalIntensity;
 
-                    // // --- Apply Fog ---
+                    // --- Apply Fog ---
                     // float depth = gl_FragCoord.z / gl_FragCoord.w;
                     // float fogFactor = smoothstep(uFogNear, uFogFar, depth);
+                    // finalColor = mix(finalColor, uFogColor, fogFactor);
 
-                    // gl_FragColor = vec4(mix(finalColor, uFogColor, fogFactor), 1.0); // Opaque plants
-
-                    // --- New Final Output ---
-                    gl_FragColor = vec4(finalColor, 1.0); // Output color, Three.js adds fog
-
+                    // --- Apply Opacity From Volume Setting ---
+                    gl_FragColor = vec4(finalColor, uOpacity);
                 }
             `,
             side: THREE.DoubleSide, // Render both sides of the blade
-            transparent: false,
+            transparent: true, // Enable transparency for volume control
             depthWrite: true,
             fog: false // Enable fog uniforms
         });

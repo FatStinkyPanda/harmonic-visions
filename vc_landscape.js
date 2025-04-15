@@ -19,6 +19,26 @@ class VCLandscape {
         this.PULSE_MAGNITUDE = 2.5;     // How strongly peak impact affects elevation momentarily
         this.MORPH_SPEED_FACTOR = 0.05; // Base speed multiplier for terrain evolution
 
+        // --- Default configuration for volume/occurrence/intensity ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {}; // Store base settings from data.js
+        
+        // --- Default module settings as fallback ---
+        this.defaultLandscapeSettings = {
+            complexity: 0.5,
+            morphSpeed: 0.3,
+            dreaminess: 0.5,
+            // Add base/max values used in mapping
+            baseElevationMin: this.BASE_ELEVATION_SCALE * 0.5,
+            baseElevationMax: this.BASE_ELEVATION_SCALE * 1.5,
+            detailElevationMin: this.DETAIL_ELEVATION_SCALE * 0.3,
+            detailElevationMax: this.DETAIL_ELEVATION_SCALE * 1.8,
+            pulseMagnitudeMin: this.PULSE_MAGNITUDE * 0.5,
+            pulseMagnitudeMax: this.PULSE_MAGNITUDE * 2.0,
+            segmentsMin: this.PLANE_SEGMENTS_BASE,
+            segmentsMax: this.PLANE_SEGMENTS_MAX
+        };
+
         // --- State ---
         this.terrainMesh = null;        // THREE.Mesh object for the terrain
         this.geometry = null;           // THREE.BufferGeometry
@@ -43,12 +63,106 @@ class VCLandscape {
     }
 
     /**
+     * Maps a value from 0-100 scale to a target range
+     * @param {number} value0to100 - Input value in 0-100 range
+     * @param {number} minTarget - Minimum target output value
+     * @param {number} maxTarget - Maximum target output value
+     * @returns {number} - Mapped value in target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the 0-100 mood configuration to the landscape parameters
+     * @param {number} transitionTime - Transition time in seconds
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.isEnabled) return;
+
+        console.log(`${this.MODULE_ID}: Applying mood config:`, this.moodConfig);
+        
+        // --- Apply Volume (Visual Visibility/Opacity) ---
+        // In a visual context, "volume" could control overall visibility or opacity
+        if (this.moodConfig.volume !== undefined && this.terrainMesh) {
+            // For landscape, we could interpret volume as overall visibility/opacity
+            // Here we just ensure it's enabled when >0, disabled when 0
+            if (this.moodConfig.volume <= 0) {
+                if (this.terrainMesh.visible) {
+                    console.log(`${this.MODULE_ID}: Setting landscape invisible (volume=0)`);
+                    this.terrainMesh.visible = false;
+                }
+            } else if (!this.terrainMesh.visible) {
+                console.log(`${this.MODULE_ID}: Setting landscape visible (volume>0)`);
+                this.terrainMesh.visible = true;
+            }
+            
+            // We could also adjust opacity if using transparent materials
+            // if (this.material && this.material.transparent) {
+            //    const opacity = this._mapValue(this.moodConfig.volume, 0.0, 1.0);
+            //    this.material.opacity = opacity;
+            //    console.log(`${this.MODULE_ID}: Setting opacity to ${opacity.toFixed(2)}`);
+            // }
+        }
+
+        // --- Apply Occurrence (Detail Level) ---
+        // For landscape, "occurrence" can map to detail level (segment count)
+        if (this.moodConfig.occurrence !== undefined) {
+            const baseSegments = this.baseSettings.segmentsMin || this.defaultLandscapeSettings.segmentsMin;
+            const maxSegments = this.baseSettings.segmentsMax || this.defaultLandscapeSettings.segmentsMax;
+            const targetSegments = Math.floor(this._mapValue(this.moodConfig.occurrence, baseSegments, maxSegments));
+            
+            // Store for next geometry creation/update
+            this.currentSegmentCount = targetSegments;
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> segments ${targetSegments}`);
+            
+            // Note: Actually changing segment count requires recreating the geometry
+            // This is typically done in init or would require a special reconstruction method
+            // We don't apply this change immediately as it's expensive - it will apply on next init/changeMood
+        }
+
+        // --- Apply Intensity (Elevation, Detail, Pulse) ---
+        if (this.moodConfig.intensity !== undefined && this.material) {
+            const intensity = this.moodConfig.intensity;
+            console.log(`${this.MODULE_ID}: Applying Intensity ${intensity}/100`);
+            
+            // 1. Base Elevation Scale
+            const baseElevMin = this.baseSettings.baseElevationMin || this.defaultLandscapeSettings.baseElevationMin;
+            const baseElevMax = this.baseSettings.baseElevationMax || this.defaultLandscapeSettings.baseElevationMax;
+            const targetBaseElev = this._mapValue(intensity, baseElevMin, baseElevMax);
+            
+            // 2. Detail Elevation Scale
+            const detailElevMin = this.baseSettings.detailElevationMin || this.defaultLandscapeSettings.detailElevationMin;
+            const detailElevMax = this.baseSettings.detailElevationMax || this.defaultLandscapeSettings.detailElevationMax;
+            const targetDetailElev = this._mapValue(intensity, detailElevMin, detailElevMax);
+            
+            // 3. Pulse Magnitude
+            const pulseMin = this.baseSettings.pulseMagnitudeMin || this.defaultLandscapeSettings.pulseMagnitudeMin;
+            const pulseMax = this.baseSettings.pulseMagnitudeMax || this.defaultLandscapeSettings.pulseMagnitudeMax;
+            const targetPulse = this._mapValue(intensity, pulseMin, pulseMax);
+            
+            // Apply changes to shader uniforms
+            if (this.material.uniforms) {
+                this.material.uniforms.uBaseElevationScale.value = targetBaseElev;
+                this.material.uniforms.uDetailElevationScale.value = targetDetailElev;
+                this.material.uniforms.uPulseMagnitude.value = targetPulse;
+                
+                console.log(`${this.MODULE_ID}: Set elevation scales - Base: ${targetBaseElev.toFixed(2)}, Detail: ${targetDetailElev.toFixed(2)}, Pulse: ${targetPulse.toFixed(2)}`);
+            }
+        }
+    }
+
+    /**
      * Initializes the landscape system for the current mood.
      * @param {THREE.Scene} scene - The main Three.js scene.
      * @param {object} settings - The mood-specific settings object from data.js.
      * @param {string} mood - The current mood string.
+     * @param {object} moodConfig - The volume/occurrence/intensity config for this mood.
      */
-    init(scene, settings, mood) {
+    init(scene, settings, mood, moodConfig) {
         // --- Pre-checks ---
         if (!scene || !settings || !settings.colors || !THREE) {
             console.error(`${this.MODULE_ID}: Scene, settings, settings.colors, or THREE library missing for initialization.`);
@@ -59,22 +173,36 @@ class VCLandscape {
             return;
         }
         this.currentMood = mood || 'calm';
-        const complexity = settings.complexity || 0.5;
-
+        
+        // Store base settings and mood config
+        this.baseSettings = { ...this.defaultLandscapeSettings, ...settings };
+        this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge with defaults
+        
+        console.log(`${this.MODULE_ID}: Initializing for mood '${this.currentMood}'... Config:`, this.moodConfig);
+        
         // --- Cleanup ---
         this.dispose(scene); // Dispose previous instances first
-        console.log(`${this.MODULE_ID}: Initializing for mood '${this.currentMood}'...`);
 
         try {
             // --- Determine Segment Count ---
-            // More complex moods can justify slightly higher detail if performance allows
-            const segments = Math.floor(
-                THREE.MathUtils.lerp(
-                    this.PLANE_SEGMENTS_BASE,
-                    this.PLANE_SEGMENTS_MAX,
-                    complexity * 0.7 // Scale complexity influence
-                )
-            );
+            // Use occurrence from moodConfig to determine segment count
+            let segments = this.PLANE_SEGMENTS_BASE;
+            if (this.moodConfig.occurrence !== undefined) {
+                const baseSegments = this.baseSettings.segmentsMin || this.PLANE_SEGMENTS_BASE;
+                const maxSegments = this.baseSettings.segmentsMax || this.PLANE_SEGMENTS_MAX;
+                segments = Math.floor(this._mapValue(this.moodConfig.occurrence, baseSegments, maxSegments));
+                this.currentSegmentCount = segments;
+            } else {
+                // Fall back to complexity-based calculation if occurrence not specified
+                const complexity = settings.complexity || 0.5;
+                segments = Math.floor(
+                    THREE.MathUtils.lerp(
+                        this.PLANE_SEGMENTS_BASE,
+                        this.PLANE_SEGMENTS_MAX,
+                        complexity * 0.7 // Scale complexity influence
+                    )
+                );
+            }
             console.log(`${this.MODULE_ID}: Plane segments: ${segments}`);
 
             // --- Geometry ---
@@ -96,9 +224,18 @@ class VCLandscape {
             this.terrainMesh.castShadow = false; // Terrain casting shadows can be expensive, disable for now
             this.terrainMesh.userData = { module: this.MODULE_ID };
 
+            // Apply volume from moodConfig (visibility)
+            if (this.moodConfig.volume !== undefined && this.moodConfig.volume <= 0) {
+                this.terrainMesh.visible = false;
+                console.log(`${this.MODULE_ID}: Setting landscape invisible (volume=0)`);
+            }
+
             scene.add(this.terrainMesh);
             this.objects.push(this.terrainMesh);
             this.isEnabled = true; // Mark as enabled after successful init
+
+            // Apply mood config after everything is set up
+            this._applyMoodConfig(0); // Apply immediately
 
             console.log(`${this.MODULE_ID}: Initialized successfully for mood '${this.currentMood}'.`);
 
@@ -113,6 +250,79 @@ class VCLandscape {
     }
 
     /**
+     * Changes the landscape configuration for a new mood
+     * @param {string} newMood - The new mood to transition to
+     * @param {object} newSettings - The new mood settings
+     * @param {number} transitionTime - Transition time in seconds
+     * @param {object} moodConfig - The volume/occurrence/intensity config for the new mood
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
+        if (!this.isEnabled || !this.material) return;
+        
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}'... Config:`, moodConfig);
+        
+        try {
+            // Store new base settings and mood config
+            this.baseSettings = { ...this.defaultLandscapeSettings, ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge with existing
+            this.currentMood = newMood;
+            
+            // Apply new mood config with transition
+            this._applyMoodConfig(transitionTime);
+            
+            // Update material colors and other mood-specific settings
+            if (this.material && this.material.uniforms) {
+                const moodColors = newSettings.colors.map(c => new THREE.Color(c));
+                const rockColor = new THREE.Color(0x555560).lerp(moodColors[0], 0.2);
+                const detailColor = moodColors[moodColors.length - 1].clone().lerp(new THREE.Color(0xffffff), 0.3);
+                
+                // Update uniform values
+                this.material.uniforms.uMoodColors.value = moodColors;
+                this.material.uniforms.uRockColor.value = rockColor;
+                this.material.uniforms.uDetailColor.value = detailColor;
+                this.material.uniforms.uFogColor.value = new THREE.Color(newSettings.fogColor || '#000000');
+                this.material.uniforms.uFogNear.value = newSettings.cameraDistance ? newSettings.cameraDistance - 10 : 10;
+                this.material.uniforms.uFogFar.value = newSettings.cameraDistance ? newSettings.cameraDistance + this.PLANE_SIZE * 1.5 : 150;
+                this.material.uniforms.uComplexity.value = newSettings.complexity || 0.5;
+                this.material.uniforms.uDreaminess.value = newSettings.dreaminess || 0.5;
+                
+                console.log(`${this.MODULE_ID}: Updated material colors and fog for mood '${newMood}'`);
+            }
+            
+            // Check if segment count needs to be changed significantly
+            // Note: Changing geometry requires recreation, which is expensive
+            // Only do this for large changes in occurrence/detail level
+            if (this.moodConfig.occurrence !== undefined) {
+                const baseSegments = this.baseSettings.segmentsMin || this.PLANE_SEGMENTS_BASE;
+                const maxSegments = this.baseSettings.segmentsMax || this.PLANE_SEGMENTS_MAX;
+                const targetSegments = Math.floor(this._mapValue(this.moodConfig.occurrence, baseSegments, maxSegments));
+                
+                // Store for next update
+                this.currentSegmentCount = targetSegments;
+                
+                // Only recreate geometry if segment count change is significant (e.g., >20% difference)
+                // This is optional and depends on performance considerations
+                const currentSegments = this.geometry ? this.geometry.parameters.widthSegments : 0;
+                const segmentDiff = Math.abs(targetSegments - currentSegments) / currentSegments;
+                
+                if (segmentDiff > 0.2) { // >20% difference
+                    console.log(`${this.MODULE_ID}: Segment count change significant (${currentSegments} -> ${targetSegments}). Consider reinitializing.`);
+                    // Optionally trigger a full reconstruction via a coordinator/manager
+                    // or expose a method to request reconstruction
+                }
+            }
+            
+            console.log(`${this.MODULE_ID}: Mood parameters updated for '${newMood}'.`);
+            
+        } catch (error) {
+            console.error(`${this.MODULE_ID}: Error during mood change:`, error);
+            if (typeof ToastSystem !== 'undefined') {
+                ToastSystem.notify('error', `Landscape mood change error: ${error.message}`);
+            }
+        }
+    }
+
+    /**
      * Creates the ShaderMaterial for the landscape surface.
      * @param {object} settings - Mood settings.
      * @private
@@ -123,6 +333,28 @@ class VCLandscape {
         const rockColor = new THREE.Color(0x555560).lerp(moodColors[0], 0.2); // Greyish, tinted by base mood color
         const detailColor = moodColors[moodColors.length - 1].clone().lerp(new THREE.Color(0xffffff), 0.3); // Lighter detail/highlight color
 
+        // Apply intensity to initial elevation scales if moodConfig is available
+        let baseElevScale = this.BASE_ELEVATION_SCALE;
+        let detailElevScale = this.DETAIL_ELEVATION_SCALE;
+        let pulseMagnitude = this.PULSE_MAGNITUDE;
+        
+        if (this.moodConfig && this.moodConfig.intensity !== undefined) {
+            const intensity = this.moodConfig.intensity;
+            const baseSettings = this.baseSettings || this.defaultLandscapeSettings;
+            
+            const baseElevMin = baseSettings.baseElevationMin || this.BASE_ELEVATION_SCALE * 0.5;
+            const baseElevMax = baseSettings.baseElevationMax || this.BASE_ELEVATION_SCALE * 1.5;
+            baseElevScale = this._mapValue(intensity, baseElevMin, baseElevMax);
+            
+            const detailElevMin = baseSettings.detailElevationMin || this.DETAIL_ELEVATION_SCALE * 0.3;
+            const detailElevMax = baseSettings.detailElevationMax || this.DETAIL_ELEVATION_SCALE * 1.8;
+            detailElevScale = this._mapValue(intensity, detailElevMin, detailElevMax);
+            
+            const pulseMin = baseSettings.pulseMagnitudeMin || this.PULSE_MAGNITUDE * 0.5;
+            const pulseMax = baseSettings.pulseMagnitudeMax || this.PULSE_MAGNITUDE * 2.0;
+            pulseMagnitude = this._mapValue(intensity, pulseMin, pulseMax);
+        }
+
         this.material = new THREE.ShaderMaterial({
             uniforms: {
                 // Time & Noise
@@ -130,8 +362,8 @@ class VCLandscape {
                 uNoiseTime: { value: this.noiseTime },
                 uMorphSpeedFactor: { value: this.MORPH_SPEED_FACTOR },
                 // Elevation & Shape
-                uBaseElevationScale: { value: this.BASE_ELEVATION_SCALE },
-                uDetailElevationScale: { value: this.DETAIL_ELEVATION_SCALE },
+                uBaseElevationScale: { value: baseElevScale },
+                uDetailElevationScale: { value: detailElevScale },
                 uComplexity: { value: settings.complexity || 0.5 },
                 // Audio/Visual Params
                 uLandscapeElevation: { value: 1.0 }, // Overall multiplier from connector
@@ -139,7 +371,7 @@ class VCLandscape {
                 uDreaminess: { value: settings.dreaminess || 0.5 },
                 uPeakImpact: { value: 0.0 }, // For pulsing
                 uPulseStartTime: { value: -1.0 },
-                uPulseMagnitude: { value: this.PULSE_MAGNITUDE },
+                uPulseMagnitude: { value: pulseMagnitude },
                 uRawBass: { value: 0.0 }, // Subtle height modulation
                 uGlobalIntensity: { value: 1.0 },
                 // Colors & Lighting

@@ -7,14 +7,22 @@
 const EmotionVisualModules = {
     calm: [
         { module: 'lighting', occurrence: 100, intensity: 60 },
+
         { module: 'stars', occurrence: 80, intensity: 65 },
-        { module: 'landscape', occurrence: 100, intensity: 40 }, // Less dramatic landscape
+
+        // { module: 'landscape', occurrence: 40, intensity: 95 }, // Less dramatic landscape
+
         { module: 'water', occurrence: 100, intensity: 50 },
-        { module: 'particles', occurrence: 40, intensity: 30 }, // Subtle dust/mist
-        { module: 'dreamEffects', occurrence: 20, intensity: 40 }, // Few gentle orbs
-        // { module: 'celestial', occurrence: 0, intensity: 0 }, // No sun/moon
-        // { module: 'plants', occurrence: 30, intensity: 40 }, // Sparse gentle plants
-        // { module: 'clouds', occurrence: 20, intensity: 30 }, // Light, high clouds
+        
+        { module: 'particles', volume: 100, occurrence: 40, intensity: 100 }, // Subtle dust/mist
+
+        // { module: 'dreamEffects', volume: 100, occurrence: 2, intensity: 1 }, // Few gentle orbs
+
+        { module: 'celestial', volume: 100, occurrence: 85, intensity: 70 },
+
+        { module: 'plants', volume: 100, occurrence: 30, intensity: 40 }, // Sparse gentle plants
+
+        { module: 'clouds', occurrence: 80, intensity: 30 }, // Light, high clouds
     ],
     soft: [
         { module: 'lighting', occurrence: 100, intensity: 70 }, // Warmer light intensity
