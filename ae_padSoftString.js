@@ -1,7 +1,7 @@
 // ae_padSoftString.js - Audio Module for Soft, Evolving String Pads
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.1.0 (Enhanced Error Handling, Optimization, Uniqueness)
+// Version: 1.2.0 (Enhanced with Volume/Occurrence/Intensity configuration)
 
 /**
  * @class AEPadSoftString
@@ -24,6 +24,10 @@ class AEPadSoftString {
         this.filterNode = null;         // Primary filter (Lowpass) to shape the sound
         this.notesData = [];            // Array to store { freq, oscillators: [], noteGain } for each chord note
         this.lfoNodes = {};             // Stores LFOs and their gains { filterLFO, filterLFOGain, pitchLFO, pitchLFOGain }
+        
+        // --- Mood Configuration ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
+        this.baseSettings = {};         // Store base settings from data.js
 
         // --- Default Settings for Soft Strings ---
         this.defaultPadSettings = {
@@ -45,6 +49,15 @@ class AEPadSoftString {
             scale: 'major',
             baseFreq: 110,              // A2 - Lower base often suits pads
             chordNotes: [0, 7, 16],     // Default: Root, Fifth, Major Third (spread voicing example)
+            // --- Parameter range settings for intensity mapping ---
+            filterQBase: 0.9,           // Base filter Q value (minimum, when intensity = 0)
+            filterQMax: 5.0,            // Maximum filter Q value (when intensity = 100)
+            filterLFODepthBase: 150,    // Base filter LFO depth (minimum)
+            filterLFODepthMax: 900,     // Maximum filter LFO depth
+            pitchLFODepthBase: 1.0,     // Base pitch LFO depth (minimum)
+            pitchLFODepthMax: 8.0,      // Maximum pitch LFO depth
+            detuneAmountBase: 4,        // Base detune amount (minimum)
+            detuneAmountMax: 14,        // Maximum detune amount
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
@@ -58,13 +71,14 @@ class AEPadSoftString {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration (0-100 values).
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -72,8 +86,13 @@ class AEPadSoftString {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            // Merge initial settings with specific defaults for this pad type
-            this.settings = { ...this.defaultPadSettings, ...initialSettings };
+            
+            // Store base settings for mixin with defaults
+            this.baseSettings = { ...this.defaultPadSettings, ...initialSettings };
+            // Store specific 0-100 mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
+            // Merge settings for actual use (will be modified by _applyMoodConfig)
+            this.settings = { ...this.baseSettings };
             this.currentMood = initialMood;
 
             // --- Create Core Nodes ---
@@ -86,6 +105,9 @@ class AEPadSoftString {
             this.filterNode.type = this.settings.filterType || 'lowpass';
             this.filterNode.frequency.setValueAtTime(this.settings.filterFreq, this.audioContext.currentTime);
             this.filterNode.Q.setValueAtTime(this.settings.filterQ, this.audioContext.currentTime);
+
+            // Apply mood configuration before creating oscillators (so intensity affects creation params)
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             // 3. Create Oscillators, Note Gains, and LFOs
             this._createSoundStructure(this.settings); // Builds the core sound generation part
@@ -200,7 +222,8 @@ class AEPadSoftString {
 
             // 2. Apply Attack Envelope via Output Gain
             const attackTime = this.settings.attackTime || this.defaultPadSettings.attackTime;
-            const targetVolume = this.settings.padVolume || this.defaultPadSettings.padVolume;
+            // Use the volume-adjusted padVolume from settings (modified by _applyMoodConfig)
+            const targetVolume = this.settings.padVolume;
 
             this.outputGain.gain.cancelScheduledValues(targetStartTime);
             this.outputGain.gain.setValueAtTime(0.0001, targetStartTime); // Start from near silence
@@ -289,31 +312,30 @@ class AEPadSoftString {
      * @param {string} newMood - The key of the new mood.
      * @param {object} newSettings - The moodAudioSettings for the new mood.
      * @param {number} transitionTime - Duration for the transition in seconds.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration (0-100 values).
      */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
              console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is missing.`);
              return;
         }
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s. Config:`, moodConfig);
 
         try {
-            // Merge new settings with defaults for this specific pad type
-            this.settings = { ...this.defaultPadSettings, ...newSettings };
+            // Store the original base settings before any mood config is applied
+            this.baseSettings = { ...this.defaultPadSettings, ...newSettings };
+            // Update mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = newMood;
-
+            
+            // Apply new mood config with transition (will update volume, filter settings, LFO depths)
+            this._applyMoodConfig(transitionTime);
+            
             const now = this.audioContext.currentTime;
             const rampTime = transitionTime * 0.7; // Use a good portion for smooth parameter ramps
 
-            // --- Update Master Volume ---
-            if (this.outputGain) {
-                const targetVolume = this.isPlaying ? this.settings.padVolume : 0.0001;
-                this.outputGain.gain.cancelScheduledValues(now);
-                this.outputGain.gain.setTargetAtTime(targetVolume, now, rampTime / 3); // Faster volume adjustment
-            }
-
-            // --- Update Filter Parameters ---
+            // --- Update Filter Type ---
             if (this.filterNode) {
                 // Filter type change (immediate, cannot be ramped)
                 const newFilterType = this.settings.filterType || 'lowpass';
@@ -321,25 +343,30 @@ class AEPadSoftString {
                     console.warn(`${this.MODULE_ID}: Filter type changed (${this.filterNode.type} -> ${newFilterType}). Changing immediately.`);
                     this.filterNode.type = newFilterType;
                 }
-                // Ramp frequency and Q
-                this.filterNode.frequency.setTargetAtTime(this.settings.filterFreq, now, rampTime);
-                this.filterNode.Q.setTargetAtTime(this.settings.filterQ, now, rampTime);
+                // Filter frequency is updated by _applyMoodConfig
             }
 
-            // --- Update LFO Parameters ---
-            if (this.lfoNodes.filterLFO && this.lfoNodes.filterLFOGain) {
-                this.lfoNodes.filterLFO.frequency.setTargetAtTime(this.settings.filterLFORate, now, rampTime);
-                this.lfoNodes.filterLFOGain.gain.setTargetAtTime(this.settings.filterLFODepth, now, rampTime);
+            // --- Update LFO Rates (not part of intensity) ---
+            if (this.lfoNodes.filterLFO) {
+                this.lfoNodes.filterLFO.frequency.setTargetAtTime(
+                    this.settings.filterLFORate, 
+                    now, 
+                    rampTime
+                );
             }
-            if (this.lfoNodes.pitchLFO && this.lfoNodes.pitchLFOGain) {
-                this.lfoNodes.pitchLFO.frequency.setTargetAtTime(this.settings.pitchLFORate, now, rampTime);
-                this.lfoNodes.pitchLFOGain.gain.setTargetAtTime(this.settings.pitchLFODepth, now, rampTime);
+            if (this.lfoNodes.pitchLFO) {
+                this.lfoNodes.pitchLFO.frequency.setTargetAtTime(
+                    this.settings.pitchLFORate, 
+                    now, 
+                    rampTime
+                );
             }
 
             // --- Update Oscillator Parameters (Frequencies, Waveform, Detune) ---
             const newChordFreqs = this._getChordFrequencies(this.settings);
             const newWaveform = this.settings.padWaveform || 'sawtooth';
-            const newDetune = this.settings.detuneAmount || 7;
+            // Detune is adjusted by _applyMoodConfig based on intensity
+            const newDetune = this.settings.detuneAmount;
 
             // --- Strategy: Recreate if chord structure changes, otherwise ramp existing ---
             if (newChordFreqs.length !== this.notesData.length) {
@@ -482,7 +509,146 @@ class AEPadSoftString {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = {};
             console.log(`${this.MODULE_ID}: Disposal complete.`);
+        }
+    }
+
+    // --- Configuration Helper Methods ---
+
+    /**
+     * Maps a value from 0-100 scale to target min/max range.
+     * @param {number} value0to100 - Value between 0-100 to map.
+     * @param {number} minTarget - Target range minimum.
+     * @param {number} maxTarget - Target range maximum.
+     * @returns {number} Mapped value between minTarget and maxTarget.
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the mood configuration (volume, occurrence, intensity) to module parameters.
+     * @param {number} transitionTime - Duration for transition in seconds.
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.baseSettings) return;
+
+        console.log(`${this.MODULE_ID}: Applying mood configuration - volume: ${this.moodConfig.volume}, occurrence: ${this.moodConfig.occurrence}, intensity: ${this.moodConfig.intensity}`);
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.6 : 0; // Use a portion for ramps
+        const timeConstant = rampTime / 3.0;
+
+        // Create working copy of settings by merging base settings (stored from initialSettings/newSettings)
+        this.settings = { ...this.baseSettings };
+
+        // --- Apply Volume ---
+        if (this.outputGain && this.moodConfig.volume !== undefined) {
+            // Map volume 0-100 to 0-baseVolume (from baseSettings)
+            const baseVolume = this.baseSettings.padVolume || this.defaultPadSettings.padVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            // Store calculated value in settings for play() to use
+            this.settings.padVolume = targetVolume;
+            
+            // If already playing, apply volume transition
+            if (this.isPlaying && rampTime > 0.01) {
+                this.outputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+            } else if (this.isPlaying) {
+                this.outputGain.gain.setValueAtTime(targetVolume, now);
+            }
+            // If not playing, the play() method will use settings.padVolume when started
+        }
+
+        // --- Apply Occurrence ---
+        // For this pad, occurrence mainly affects the number of layers/voices
+        if (this.moodConfig.occurrence !== undefined) {
+            // Map occurrence to number of detuned oscillators (0-100 to 0-3)
+            const maxDetuned = 3; // Maximum number of detuned oscillators
+            const targetDetunedCount = Math.floor(this._mapValue(this.moodConfig.occurrence, 0, maxDetuned));
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> ${targetDetunedCount} detuned oscillators`);
+            
+            // Update settings for next sound creation
+            this.settings.numDetunedOscs = targetDetunedCount;
+            
+            // Note: This requires recreating the oscillator structure if it changes drastically
+            // We'll handle the recreation in changeMood() if needed
+        }
+
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+
+            // 1. Filter Q (Resonance)
+            const baseQ = this.baseSettings.filterQBase || this.defaultPadSettings.filterQBase;
+            const maxQ = this.baseSettings.filterQMax || this.defaultPadSettings.filterQMax;
+            const targetQ = this._mapValue(this.moodConfig.intensity, baseQ, maxQ);
+            
+            // Update setting for future reference
+            this.settings.filterQ = targetQ;
+            
+            // Apply to node if it exists
+            if (this.filterNode) {
+                console.log(`  -> Filter Q: ${targetQ.toFixed(2)}`);
+                if (rampTime > 0.01) {
+                    this.filterNode.Q.setTargetAtTime(targetQ, now, timeConstant);
+                } else {
+                    this.filterNode.Q.setValueAtTime(targetQ, now);
+                }
+            }
+
+            // 2. Filter LFO Depth
+            const baseLFODepth = this.baseSettings.filterLFODepthBase || this.defaultPadSettings.filterLFODepthBase;
+            const maxLFODepth = this.baseSettings.filterLFODepthMax || this.defaultPadSettings.filterLFODepthMax;
+            const targetLFODepth = this._mapValue(this.moodConfig.intensity, baseLFODepth, maxLFODepth);
+            
+            // Update setting for future reference
+            this.settings.filterLFODepth = targetLFODepth;
+            
+            // Apply to node if it exists
+            if (this.lfoNodes.filterLFOGain) {
+                console.log(`  -> Filter LFO Depth: ${targetLFODepth.toFixed(2)} Hz`);
+                if (rampTime > 0.01) {
+                    this.lfoNodes.filterLFOGain.gain.setTargetAtTime(targetLFODepth, now, timeConstant);
+                } else {
+                    this.lfoNodes.filterLFOGain.gain.setValueAtTime(targetLFODepth, now);
+                }
+            }
+
+            // 3. Pitch LFO Depth (Vibrato/Chorus effect)
+            const basePitchLFODepth = this.baseSettings.pitchLFODepthBase || this.defaultPadSettings.pitchLFODepthBase;
+            const maxPitchLFODepth = this.baseSettings.pitchLFODepthMax || this.defaultPadSettings.pitchLFODepthMax;
+            const targetPitchLFODepth = this._mapValue(this.moodConfig.intensity, basePitchLFODepth, maxPitchLFODepth);
+            
+            // Update setting for future reference
+            this.settings.pitchLFODepth = targetPitchLFODepth;
+            
+            // Apply to node if it exists
+            if (this.lfoNodes.pitchLFOGain) {
+                console.log(`  -> Pitch LFO Depth: ${targetPitchLFODepth.toFixed(2)} cents`);
+                if (rampTime > 0.01) {
+                    this.lfoNodes.pitchLFOGain.gain.setTargetAtTime(targetPitchLFODepth, now, timeConstant);
+                } else {
+                    this.lfoNodes.pitchLFOGain.gain.setValueAtTime(targetPitchLFODepth, now);
+                }
+            }
+
+            // 4. Detune Amount
+            const baseDetune = this.baseSettings.detuneAmountBase || this.defaultPadSettings.detuneAmountBase;
+            const maxDetune = this.baseSettings.detuneAmountMax || this.defaultPadSettings.detuneAmountMax;
+            const targetDetune = this._mapValue(this.moodConfig.intensity, baseDetune, maxDetune);
+            
+            // Update setting for oscillator creation/adjustment
+            this.settings.detuneAmount = targetDetune;
+            console.log(`  -> Detune Amount: ${targetDetune.toFixed(2)} cents`);
+            
+            // For existing oscillators, we'll handle detune updates in changeMood
+            // as it requires identifying the correct oscillators and their detune values
         }
     }
 

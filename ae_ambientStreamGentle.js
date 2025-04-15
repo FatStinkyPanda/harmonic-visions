@@ -1,7 +1,7 @@
 // ae_ambientStreamGentle.js - Audio Module for Gentle Stream Ambience
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 2.0.0 (Enhanced Quality, Robustness, Optimization)
+// Version: 2.1.0 (Enhanced with Volume, Occurrence, Intensity controls)
 
 /**
  * @class AEAmbientStreamGentle
@@ -16,9 +16,13 @@ class AEAmbientStreamGentle {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store base settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // Added for volume/occurrence/intensity controls
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes ---
         this.outputGain = null;     // Master gain for this module (controls volume and fades)
@@ -55,9 +59,246 @@ class AEAmbientStreamGentle {
             // Added for subtle variation over time
             filterDriftFactor: 30,  // Max Hz drift for main filter over long periods
             filterDriftSpeed: 0.008,// Speed of the slow filter drift
+            
+            // Added for intensity mapping - min/max values for parameters
+            mainFilterQBase: 0.6,   // Min Q value at 0% intensity
+            mainFilterQMax: 2.0,    // Max Q value at 100% intensity
+            bandPassQBaseMin: 2.0,  // Min bandpass Q at 0% intensity 
+            bandPassQBaseMax: 5.0,  // Max bandpass Q at 100% intensity
+            lfoDepthBaseMin: 40,    // Min LFO depth at 0% intensity
+            lfoDepthBaseMax: 120,   // Max LFO depth at 100% intensity
+            panLFODepthMin: 0.15,   // Min pan depth at 0% intensity
+            panLFODepthMax: 0.5,    // Max pan depth at 100% intensity
+            filterDriftFactorMin: 10, // Min filter drift at 0% intensity
+            filterDriftFactorMax: 50, // Max filter drift at 100% intensity
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
+    }
+
+    // --- Added helper for mapping 0-100 values ---
+    
+    /**
+     * Maps a value from 0-100 scale to a target range
+     * @param {number} value0to100 - Input value (0-100)
+     * @param {number} minTarget - Target range minimum
+     * @param {number} maxTarget - Target range maximum
+     * @returns {number} Mapped value in target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+    
+    /**
+     * Applies the mood configuration (volume, occurrence, intensity) to audio parameters
+     * @param {number} transitionTime - Time in seconds for the transition
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext) return; // Check if config and context exist
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0; // Shorter ramp for config changes
+        const timeConstant = rampTime / 3.0;
+
+        // --- Apply Volume ---
+        if (this.outputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings?.ambientVolume || this.defaultStreamSettings.ambientVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (rampTime > 0.01) {
+                this.outputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+            } else {
+                // If we're playing, we should be careful not to disrupt the attack/release envelopes
+                if (this.isPlaying) {
+                    // Get current value to avoid jumps
+                    const currentGain = this.outputGain.gain.value;
+                    if (Math.abs(currentGain - targetVolume) > 0.001) { // Only change if significant
+                        this.outputGain.gain.setTargetAtTime(targetVolume, now, 0.1); // Quick but smooth transition
+                    }
+                } else {
+                    this.outputGain.gain.setValueAtTime(targetVolume, now);
+                }
+            }
+            
+            // Store the target volume for future reference (when playing/stopping)
+            this.settings.ambientVolume = targetVolume;
+        }
+
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100`);
+            
+            // For streams, occurrence affects:
+            // 1. Number of bandpass filters (richness of texture)
+            const baseNumFilters = this.baseSettings?.numBandPassFilters || this.defaultStreamSettings.numBandPassFilters;
+            const targetNumFilters = Math.round(this._mapValue(this.moodConfig.occurrence, 1, baseNumFilters));
+            
+            // 2. Bandpass gain factor (how prominent the resonances are)
+            const baseGainFactor = this.baseSettings?.bandPassGainFactor || this.defaultStreamSettings.bandPassGainFactor;
+            const targetGainFactor = this._mapValue(this.moodConfig.occurrence, 0.2, baseGainFactor);
+            
+            console.log(`  -> Target filters: ${targetNumFilters}, Gain factor: ${targetGainFactor.toFixed(2)}`);
+            
+            // Only rebuild filter chain if the number of filters has changed
+            if (targetNumFilters !== this.bandPassFilters.length && this.isEnabled) {
+                console.log(`${this.MODULE_ID}: Rebuilding filter chain - filters count changed (${this.bandPassFilters.length} -> ${targetNumFilters}).`);
+                
+                // Update settings for rebuild
+                this.settings.numBandPassFilters = targetNumFilters;
+                this.settings.bandPassGainFactor = targetGainFactor;
+                
+                // Disconnect old bandpass filters
+                this._disconnectAndClearBandpassFilters();
+                
+                // Find and disconnect only the LFOs targeting the bandpass filters (keep pan LFO)
+                const bpLFOs = this.lfoNodes.filter(l => !l.isPanLFO);
+                bpLFOs.forEach(lfoData => {
+                    if (lfoData.lfo) try { if (lfoData.lfo.stop) lfoData.lfo.stop(0); lfoData.lfo.disconnect(); } catch(e) {}
+                    if (lfoData.gain) try { lfoData.gain.disconnect(); } catch(e) {}
+                });
+                // Remove them from the main LFO array
+                this.lfoNodes = this.lfoNodes.filter(l => l.isPanLFO);
+                
+                // Create new filter chain with updated settings
+                this._createFilterChain(this.settings);
+                
+                // Create new LFOs for the new bandpass filters
+                this._createLFOs(this.settings);
+                
+                // Connect the new filters and LFOs
+                if (this.mainFilter && this.pannerNode) {
+                    this.bandPassFilters.forEach(bpData => {
+                        if (bpData.inputGain && bpData.filter) {
+                            this.mainFilter.connect(bpData.inputGain);
+                            bpData.filter.connect(this.pannerNode);
+                        }
+                    });
+                }
+                this._connectLFOs();
+                
+                // Start LFOs if we're currently playing
+                if (this.isPlaying) {
+                    this.lfoNodes.forEach(lfoData => {
+                        if (lfoData.lfo && lfoData.lfo.start) {
+                            try { lfoData.lfo.start(now); } catch(e) { /* Ignore if already started */ }
+                        }
+                    });
+                }
+            } 
+            // If filter count hasn't changed, just update the gain values
+            else if (this.isEnabled && rampTime > 0) {
+                this.settings.bandPassGainFactor = targetGainFactor;
+                const baseGain = targetGainFactor / Math.max(1, targetNumFilters);
+                
+                this.bandPassFilters.forEach(bpData => {
+                    if (bpData.inputGain) {
+                        bpData.inputGain.gain.setTargetAtTime(baseGain, now, timeConstant);
+                    }
+                });
+            }
+        }
+
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined && this.isEnabled) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Main Filter Q (more resonance = more prominent central stream sound)
+            if (this.mainFilter) {
+                const baseQ = this.baseSettings?.mainFilterQBase || this.defaultStreamSettings.mainFilterQBase;
+                const maxQ = this.baseSettings?.mainFilterQMax || this.defaultStreamSettings.mainFilterQMax;
+                const targetQ = this._mapValue(this.moodConfig.intensity, baseQ, maxQ);
+                
+                if (rampTime > 0.01) {
+                    this.mainFilter.Q.setTargetAtTime(targetQ, now, timeConstant);
+                } else {
+                    this.mainFilter.Q.setValueAtTime(targetQ, now);
+                }
+                console.log(`  -> Main Filter Q: ${targetQ.toFixed(2)}`);
+                // Update settings for future reference
+                this.settings.mainFilterQ = targetQ;
+            }
+            
+            // 2. Bandpass Filter Q values (more resonance = more distinct water details)
+            if (this.bandPassFilters.length > 0) {
+                const minQ = this.baseSettings?.bandPassQBaseMin || this.defaultStreamSettings.bandPassQBaseMin;
+                const maxQ = this.baseSettings?.bandPassQBaseMax || this.defaultStreamSettings.bandPassQBaseMax;
+                const targetBaseQ = this._mapValue(this.moodConfig.intensity, minQ, maxQ);
+                
+                // Update settings for future filter creation
+                this.settings.bandPassQBase = targetBaseQ;
+                
+                // Update existing filters
+                this.bandPassFilters.forEach((bpData, i) => {
+                    if (bpData.filter) {
+                        // Apply some randomness for variety, but centered around the target Q
+                        const randomFactor = 0.7 + (Math.random() * 0.6); // 0.7-1.3 random factor
+                        const thisFilterQ = targetBaseQ * randomFactor;
+                        
+                        if (rampTime > 0.01) {
+                            bpData.filter.Q.setTargetAtTime(thisFilterQ, now, timeConstant);
+                        } else {
+                            bpData.filter.Q.setValueAtTime(thisFilterQ, now);
+                        }
+                    }
+                });
+                console.log(`  -> Bandpass Base Q: ${targetBaseQ.toFixed(2)}`);
+            }
+            
+            // 3. LFO depths for bandpass filters (modulation intensity)
+            if (this.lfoNodes.length > 0) {
+                const minDepth = this.baseSettings?.lfoDepthBaseMin || this.defaultStreamSettings.lfoDepthBaseMin;
+                const maxDepth = this.baseSettings?.lfoDepthBaseMax || this.defaultStreamSettings.lfoDepthBaseMax;
+                const targetDepthBase = this._mapValue(this.moodConfig.intensity, minDepth, maxDepth);
+                
+                // Update settings
+                this.settings.lfoDepthBase = targetDepthBase;
+                console.log(`  -> LFO Depth Base: ${targetDepthBase.toFixed(2)}`);
+                
+                // Update existing frequency LFOs (not pan LFO)
+                this.lfoNodes.forEach(lfoData => {
+                    if (!lfoData.isPanLFO && lfoData.gain) {
+                        // Apply some randomness for variety
+                        const randomFactor = 0.8 + (Math.random() * 0.4); // 0.8-1.2 random factor
+                        const thisLfoDepth = targetDepthBase * randomFactor;
+                        
+                        if (rampTime > 0.01) {
+                            lfoData.gain.gain.setTargetAtTime(thisLfoDepth, now, timeConstant);
+                        } else {
+                            lfoData.gain.gain.setValueAtTime(thisLfoDepth, now);
+                        }
+                    }
+                });
+            }
+            
+            // 4. Panning LFO depth (stereo width and movement)
+            const panLFOData = this.lfoNodes.find(l => l.isPanLFO);
+            if (panLFOData && panLFOData.gain) {
+                const minPanDepth = this.baseSettings?.panLFODepthMin || this.defaultStreamSettings.panLFODepthMin;
+                const maxPanDepth = this.baseSettings?.panLFODepthMax || this.defaultStreamSettings.panLFODepthMax;
+                const targetPanDepth = this._mapValue(this.moodConfig.intensity, minPanDepth, maxPanDepth);
+                
+                if (rampTime > 0.01) {
+                    panLFOData.gain.gain.setTargetAtTime(targetPanDepth, now, timeConstant);
+                } else {
+                    panLFOData.gain.gain.setValueAtTime(targetPanDepth, now);
+                }
+                console.log(`  -> Pan LFO Depth: ${targetPanDepth.toFixed(2)}`);
+                // Update settings
+                this.settings.panLFODepth = targetPanDepth;
+            }
+            
+            // 5. Filter drift factor (long-term variation)
+            const minDrift = this.baseSettings?.filterDriftFactorMin || this.defaultStreamSettings.filterDriftFactorMin;
+            const maxDrift = this.baseSettings?.filterDriftFactorMax || this.defaultStreamSettings.filterDriftFactorMax;
+            const targetDrift = this._mapValue(this.moodConfig.intensity, minDrift, maxDrift);
+            console.log(`  -> Filter Drift Factor: ${targetDrift.toFixed(2)}`);
+            // Update settings (will be used in update loop)
+            this.settings.filterDriftFactor = targetDrift;
+        }
     }
 
     // --- Core Module Methods (Following AudioEngine Interface) ---
@@ -68,13 +309,14 @@ class AEAmbientStreamGentle {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - Configuration for volume, occurrence, and intensity (0-100 values).
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -85,8 +327,13 @@ class AEAmbientStreamGentle {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            // Merge initial settings with specific defaults for this module
-            this.settings = { ...this.defaultStreamSettings, ...initialSettings };
+            
+            // Store base settings separately from the working settings
+            this.baseSettings = { ...this.defaultStreamSettings, ...initialSettings };
+            // Initialize working settings from base settings
+            this.settings = { ...this.baseSettings };
+            // Store the mood config
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = initialMood;
 
             // --- Generate Noise Buffer ---
@@ -110,6 +357,9 @@ class AEAmbientStreamGentle {
 
             // --- Create LFOs ---
             this._createLFOs(this.settings); // Creates LFO oscillators and gains
+
+            // --- Apply mood config before connecting (sets volumes, number of filters, etc.) ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
              // --- Connect Audio Graph ---
              // Noise Source (created in play) -> Main Filter -> Panner (Dry Path)
@@ -353,8 +603,9 @@ class AEAmbientStreamGentle {
      * @param {string} newMood - The key of the new mood.
      * @param {object} newSettings - The moodAudioSettings for the new mood.
      * @param {number} transitionTime - Duration for the transition in seconds.
+     * @param {object} moodConfig - Configuration for volume, occurrence, and intensity (0-100 values).
      */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is missing.`);
@@ -364,112 +615,59 @@ class AEAmbientStreamGentle {
            console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is closed.`);
            return;
         }
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
 
         try {
-            // Merge new settings with defaults
-            this.settings = { ...this.defaultStreamSettings, ...newSettings };
+            // Update base settings and mood config
+            this.baseSettings = { ...this.defaultStreamSettings, ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = newMood;
 
+            // Update working settings (will be modified by _applyMoodConfig)
+            this.settings = { ...this.baseSettings };
+
+            // Apply mood config (handles volume, occurrence, intensity mapping to parameters)
+            this._applyMoodConfig(transitionTime);
+
             const now = this.audioContext.currentTime;
-            // Use a significant portion of transition time for smooth ramps
-            const rampTime = Math.max(0.1, transitionTime * 0.7);
-            const shortRampTime = rampTime / 3.0; // Faster ramp for volume
 
-            // --- Update Module Parameters ---
-
-            // 1. Overall Volume
-            if (this.outputGain) {
-                const targetVolume = this.isPlaying ? this.settings.ambientVolume : 0.0001;
-                this.outputGain.gain.cancelScheduledValues(now);
-                this.outputGain.gain.setTargetAtTime(targetVolume, now, shortRampTime);
-            }
-
-            // 2. Main Filter
+            // --- Update Base Parameters Not Controlled by MoodConfig ---
+            // Only update those that aren't already handled by _applyMoodConfig
+            
+            // Main Filter Frequency (not intensity controlled)
             if (this.mainFilter) {
-                this.mainFilter.frequency.setTargetAtTime(this.settings.mainFilterFreq, now, rampTime);
-                this.mainFilter.Q.setTargetAtTime(this.settings.mainFilterQ, now, rampTime);
+                this.mainFilter.frequency.setTargetAtTime(this.settings.mainFilterFreq, now, transitionTime * 0.7);
             }
-
-            // 3. Panning LFO
-            const panLFOData = this.lfoNodes.find(l => l.isPanLFO);
-            if (panLFOData && panLFOData.lfo && panLFOData.gain) {
-                 panLFOData.lfo.frequency.setTargetAtTime(this.settings.panLFORate, now, rampTime);
-                 panLFOData.gain.gain.setTargetAtTime(this.settings.panLFODepth, now, rampTime);
-            }
-
-            // 4. BandPass Filters & Associated LFOs
-            const numBPs = this.settings.numBandPassFilters || 0;
-            if (numBPs !== this.bandPassFilters.length) {
-                // --- Structure Changed: Recreate Filters and LFOs ---
-                console.warn(`${this.MODULE_ID}: Number of bandpass filters changed (${this.bandPassFilters.length} -> ${numBPs}). Recreating filter chain and LFOs.`);
-
-                // a. Disconnect old BPs and their LFOs
-                this._disconnectAndClearBandpassFilters(); // Disconnects filters from panner/mainFilter
-                // Find and disconnect only the LFOs targeting the old bandpass filters
-                 const bpLFOs = this.lfoNodes.filter(l => !l.isPanLFO);
-                 bpLFOs.forEach(lfoData => {
-                      if (lfoData.lfo) try { if(lfoData.lfo.stop) lfoData.lfo.stop(0); lfoData.lfo.disconnect(); } catch(e){}
-                      if (lfoData.gain) try { lfoData.gain.disconnect(); } catch(e){}
-                 });
-                 // Remove them from the main LFO array (keep panning LFO)
-                 this.lfoNodes = this.lfoNodes.filter(l => l.isPanLFO);
-
-                // b. Create new filters and LFOs based on new settings
-                this._createFilterChain(this.settings); // Creates new bandpass filters/gains
-                this._createLFOs(this.settings); // Creates only *new* LFOs for the new filters
-
-                // c. Reconnect the new filters and LFOs
-                 if (this.mainFilter && this.pannerNode) {
-                      this.bandPassFilters.forEach(bpData => {
-                          if (bpData.inputGain && bpData.filter) {
-                               this.mainFilter.connect(bpData.inputGain);
-                               bpData.filter.connect(this.pannerNode);
-                          }
-                      });
-                 }
-                this._connectLFOs(); // Connects *all* LFOs currently in the array
-
-                // d. Restart LFOs if playing
-                 if (this.isPlaying) {
-                     this.lfoNodes.forEach(lfoData => {
-                          if (lfoData.lfo && lfoData.lfo.start) {
-                              try { lfoData.lfo.start(now); } catch(e){ /* ignore if already started */ }
-                          }
-                     });
-                 }
-
-            } else {
-                // --- Structure Same: Ramp Existing Parameters ---
-                // Ramp existing BandPass filter parameters
-                this.bandPassFilters.forEach((bpData, i) => {
-                    if (bpData.filter) {
-                        // Recalculate target params with randomness for variety
-                        const freq = this.settings.bandPassFreqBase + Math.random() * this.settings.bandPassFreqRange;
-                        const q = this.settings.bandPassQBase + Math.random() * this.settings.bandPassQRange;
-                        bpData.filter.frequency.setTargetAtTime(freq, now, rampTime);
-                        bpData.filter.Q.setTargetAtTime(q, now, rampTime);
-                    }
-                     // Optionally ramp inputGain if needed
-                     // if (bpData.inputGain) {
-                     //     const targetGain = (this.settings.bandPassGainFactor || 0.6) / Math.max(1, numBPs);
-                     //     bpData.inputGain.gain.setTargetAtTime(targetGain, now, rampTime);
-                     // }
-                });
-
-                // Ramp existing BandPass LFO parameters (excluding pan LFO)
-                this.lfoNodes.forEach((lfoData, i) => {
-                    if (!lfoData.isPanLFO && lfoData.lfo && lfoData.gain) {
-                        // Recalculate target params with randomness
+            
+            // Bandpass center frequencies (not intensity controlled)
+            this.bandPassFilters.forEach((bpData, i) => {
+                if (bpData.filter) {
+                    // Recalculate target params with randomness for variety
+                    const freq = this.settings.bandPassFreqBase + Math.random() * this.settings.bandPassFreqRange;
+                    bpData.filter.frequency.setTargetAtTime(freq, now, transitionTime * 0.7);
+                }
+            });
+            
+            // LFO rates (not intensity controlled)
+            this.lfoNodes.forEach((lfoData, i) => {
+                if (lfoData.lfo) {
+                    if (lfoData.isPanLFO) {
+                        lfoData.lfo.frequency.setTargetAtTime(this.settings.panLFORate, now, transitionTime * 0.7);
+                    } else {
+                        // Recalculate with randomness
                         const rate = this.settings.lfoRateBase + Math.random() * this.settings.lfoRateRange;
-                        const depth = this.settings.lfoDepthBase + Math.random() * this.settings.lfoDepthRange;
-                        lfoData.lfo.frequency.setTargetAtTime(rate, now, rampTime);
-                        lfoData.gain.gain.setTargetAtTime(depth, now, rampTime);
+                        lfoData.lfo.frequency.setTargetAtTime(rate, now, transitionTime * 0.7);
                     }
-                });
+                }
+            });
+            
+            // Drift speed (subtle, might not be worth changing often)
+            if (this.settings.filterDriftSpeed !== this.baseSettings.filterDriftSpeed) {
+                this.settings.filterDriftSpeed = this.baseSettings.filterDriftSpeed;
+                // No need to apply this immediately, it will be used in next update loop
             }
 
-            // Envelope times (attack/release) are updated in settings and will apply on the next play/stop cycle.
+            console.log(`${this.MODULE_ID}: Mood parameters updated for '${newMood}'.`);
 
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error during changeMood():`, error);
@@ -521,6 +719,7 @@ class AEAmbientStreamGentle {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }
     }

@@ -1,7 +1,7 @@
 // ae_bassSubSine.js - Audio Module for Deep Sub Sine Bass
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.1.0 (Enhanced Error Handling, Robustness, Cleanup)
+// Version: 1.1.1 (Added Volume/Occurrence/Intensity Controls)
 
 /**
  * @class AEBassSubSine
@@ -14,9 +14,13 @@ class AEBassSubSine {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store original settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // Add standard mood configuration properties
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes ---
         this.outputGain = null; // Master gain for envelope and volume control
@@ -32,9 +36,88 @@ class AEBassSubSine {
             maxFrequency: 85,    // Hz - upper limit for sub range (slightly extended)
             baseFreq: 110,       // Fallback base frequency (A2) if not provided
             // Note: 'scale' and 'chordNotes' are typically ignored by a sub following baseFreq.
+            
+            // Add min/max values for intensity mapping
+            attackTimeMin: 0.3,  // Faster attack at high intensity
+            attackTimeMax: 2.5,  // Slower attack at low intensity
+            releaseTimeMin: 1.0, // Faster release at high intensity
+            releaseTimeMax: 4.0, // Slower release at low intensity
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
+    }
+
+    // --- Helper Methods for Mood Configuration ---
+    
+    /**
+     * Maps a value from 0-100 range to a target range
+     * @param {number} value0to100 - Value between 0-100
+     * @param {number} minTarget - Minimum output value
+     * @param {number} maxTarget - Maximum output value
+     * @returns {number} The mapped value
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+    
+    /**
+     * Applies the mood configuration values to the module parameters
+     * @param {number} transitionTime - Time for parameter transitions
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.baseSettings) return;
+        
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0;
+        const timeConstant = rampTime / 3.0;
+        
+        // --- Apply Volume ---
+        if (this.outputGain && this.moodConfig.volume !== undefined) {
+            // Use bassVolume from baseSettings as the 100% target
+            const baseVolume = this.baseSettings.bassVolume ?? this.defaultBassSettings.bassVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            // Only apply gain change if playing, otherwise just store for next play
+            if (this.isPlaying) {
+                if (rampTime > 0.01) {
+                    this.outputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+                } else {
+                    this.outputGain.gain.setValueAtTime(targetVolume, now);
+                }
+            } else {
+                // Store in settings for next play()
+                this.settings.bassVolume = targetVolume;
+            }
+        }
+        
+        // --- Apply Occurrence ---
+        // For sub bass, occurrence primarily determines if it plays at all
+        // Handled by the AudioEngine coordinator's enable/disable logic
+        
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // Map intensity inversely to attack time (higher intensity = faster attack)
+            const attackMin = this.baseSettings.attackTimeMin ?? this.defaultBassSettings.attackTimeMin;
+            const attackMax = this.baseSettings.attackTimeMax ?? this.defaultBassSettings.attackTimeMax;
+            const targetAttack = this._mapValue(100 - this.moodConfig.intensity, attackMin, attackMax);
+            this.settings.attackTime = targetAttack;
+            console.log(`  -> Attack Time: ${targetAttack.toFixed(2)}s`);
+            
+            // Map intensity inversely to release time (higher intensity = faster release)
+            const releaseMin = this.baseSettings.releaseTimeMin ?? this.defaultBassSettings.releaseTimeMin;
+            const releaseMax = this.baseSettings.releaseTimeMax ?? this.defaultBassSettings.releaseTimeMax;
+            const targetRelease = this._mapValue(100 - this.moodConfig.intensity, releaseMin, releaseMax);
+            this.settings.releaseTime = targetRelease;
+            console.log(`  -> Release Time: ${targetRelease.toFixed(2)}s`);
+            
+            // Note: Envelope changes will apply on next play/stop cycle
+        }
     }
 
     // --- Core Module Methods (AudioEngine Interface) ---
@@ -45,13 +128,14 @@ class AEBassSubSine {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - Volume/occurrence/intensity configuration (0-100 values)
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -63,14 +147,23 @@ class AEBassSubSine {
 
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
+            
+            // Store original settings as baseSettings
+            this.baseSettings = { ...this.defaultBassSettings, ...initialSettings };
             // Merge initial settings with specific defaults for this module
             this.settings = { ...this.defaultBassSettings, ...initialSettings };
+            // Store the mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
+            
             this.currentMood = initialMood;
 
             // --- Create Core Nodes ---
             // 1. Output Gain (controls envelope and overall module volume)
             this.outputGain = this.audioContext.createGain();
             this.outputGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start silent
+
+            // Apply initial mood configuration to set parameters based on volume/intensity
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             // 2. Oscillator (will be created here or in play/changeMood)
             // We create it here so frequency can be set immediately, reducing potential clicks on first play
@@ -265,8 +358,9 @@ class AEBassSubSine {
      * @param {string} newMood - The key of the new mood.
      * @param {object} newSettings - The moodAudioSettings for the new mood.
      * @param {number} transitionTime - Duration for the transition in seconds.
+     * @param {object} moodConfig - Volume/occurrence/intensity configuration (0-100 values)
      */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is missing.`);
@@ -276,33 +370,25 @@ class AEBassSubSine {
             console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is closed.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
 
         try {
+            // Store original settings as baseSettings
+            this.baseSettings = { ...this.defaultBassSettings, ...newSettings };
             // Merge new settings with defaults
             this.settings = { ...this.defaultBassSettings, ...newSettings };
+            // Store the mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
+            
             this.currentMood = newMood;
 
+            // Apply mood configuration (handles volume, attack/release times)
+            this._applyMoodConfig(transitionTime);
+            
             const now = this.audioContext.currentTime;
             const rampTime = transitionTime * 0.7; // Use a good portion for smooth bass freq change
 
-            // --- Update Parameters ---
-
-            // 1. Volume
-            if (this.outputGain) {
-                const targetVolume = this.isPlaying ? this.settings.bassVolume : 0.0001;
-                // Use cancelAndHoldAtTime for safer transitions if available
-                if (typeof this.outputGain.gain.cancelAndHoldAtTime === 'function') {
-                    this.outputGain.gain.cancelAndHoldAtTime(now);
-                } else {
-                    this.outputGain.gain.cancelScheduledValues(now);
-                }
-                this.outputGain.gain.setTargetAtTime(targetVolume, now, rampTime / 3); // Faster volume adjustment
-            } else {
-                console.warn(`${this.MODULE_ID}: outputGain missing during changeMood.`);
-            }
-
-            // 2. Frequency
+            // Frequency (baseFreq/octaveShift changes need to be applied separately from _applyMoodConfig)
             const targetFrequency = this._calculateFrequency(this.settings); // Calculate safely
 
             if (this.oscillator && this.oscillator.frequency) {
@@ -335,8 +421,6 @@ class AEBassSubSine {
                       this.oscillator.frequency.setValueAtTime(targetFrequency, now);
                  }
             }
-
-            // Envelope times (attack/release) are updated in settings and will apply on next play/stop.
 
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error during changeMood():`, error);
@@ -397,6 +481,7 @@ class AEBassSubSine {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }
     }

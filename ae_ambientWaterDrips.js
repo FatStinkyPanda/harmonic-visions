@@ -1,7 +1,7 @@
 // ae_ambientWaterDrips.js - Audio Module for Occasional Echoing Water Drips
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
+// Version: 1.0.3 (Added mood config controls for volume/occurrence/intensity)
 
 /**
  * @class AEAmbientWaterDrips
@@ -17,9 +17,13 @@ class AEAmbientWaterDrips {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store base settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // Added mood configuration values with reasonable defaults
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes (Module Level) ---
         this.moduleOutputGain = null; // Master gain for this module (volume and overall fades)
@@ -61,7 +65,7 @@ class AEAmbientWaterDrips {
             delayTimeMin: 0.25,       // Minimum delay time (s)
             delayTimeMax: 0.7,        // Maximum delay time (s)
             delayFeedbackMin: 0.3,    // Minimum feedback gain (0-1)
-            delayFeedbackMax: 0.65,   // Maximum feedback gain (avoiding runaway feedback)
+            delayFeedbackMax: 0.65,   // Maximum feedback gain (0-1, avoiding runaway feedback)
             wetMix: 0.6,              // Balance between dry and wet signal (0-1) - echo prominent
             // Envelope (Master Module)
             attackTimeModule: 2.5,    // Module fade-in time (s) - Renamed to avoid conflict
@@ -70,9 +74,115 @@ class AEAmbientWaterDrips {
             densityFactor: 1.0,       // Multiplier for drip rate (adjusted by mood)
             pitchFactor: 1.0,         // Multiplier for frequency range (adjusted by mood)
             echoFactor: 1.0,          // Multiplier for delay time/feedback (adjusted by mood)
+            // Base & Max Values for Intensity Mapping
+            echoFactorBase: 0.7,      // Base echo factor (at intensity 0)
+            echoFactorMax: 1.5,       // Maximum echo factor (at intensity 100)
+            delayFeedbackMaxBase: 0.5, // Base max feedback (at intensity 0)
+            delayFeedbackMaxMax: 0.8,  // Maximum max feedback (at intensity 100)
+            wetMixBase: 0.4,           // Base wet mix (at intensity 0)
+            wetMixMax: 0.8,            // Maximum wet mix (at intensity 100)
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
+    }
+
+    // --- Utility Methods ---
+
+    /**
+     * Maps a value from 0-100 range to a target min-max range
+     * @param {number} value0to100 - Input value in range 0-100
+     * @param {number} minTarget - Target range minimum
+     * @param {number} maxTarget - Target range maximum
+     * @returns {number} - Mapped value in target range
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+    
+    /**
+     * Applies the 0-100 mood configuration to actual audio parameters
+     * @param {number} transitionTime - Transition time in seconds
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.isEnabled) return;
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0; // Shorter ramp for config changes
+        const timeConstant = rampTime / 3.0;
+
+        // --- Apply Volume (Module Output Gain) ---
+        if (this.moduleOutputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings.ambientVolume || this.defaultDripSettings.ambientVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (this.isPlaying) {
+                // Apply volume change with appropriate ramping if playing
+                if (rampTime > 0.01) {
+                    this.moduleOutputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+                } else {
+                    this.moduleOutputGain.gain.setValueAtTime(targetVolume, now);
+                }
+            } else {
+                // Just update the value for future use when play() is called
+                this.settings.ambientVolume = targetVolume;
+            }
+        }
+
+        // --- Apply Occurrence (Drip Density) ---
+        if (this.moodConfig.occurrence !== undefined) {
+            const baseDensity = 1.0; // Base density factor
+            const targetDensity = this._mapValue(this.moodConfig.occurrence, 0.1, baseDensity * 2.0);
+            this.settings.densityFactor = targetDensity;
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> densityFactor ${this.settings.densityFactor.toFixed(2)}`);
+            
+            // Note: The new density will be applied on the next drip scheduling cycle
+            // No immediate action needed as the _scheduleNextDrip method will use this value
+        }
+
+        // --- Apply Intensity (Echo Characteristics) ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Echo Factor - Controls general echo strength
+            const echoFactorBase = this.baseSettings.echoFactorBase || this.defaultDripSettings.echoFactorBase;
+            const echoFactorMax = this.baseSettings.echoFactorMax || this.defaultDripSettings.echoFactorMax;
+            const targetEchoFactor = this._mapValue(this.moodConfig.intensity, echoFactorBase, echoFactorMax);
+            this.settings.echoFactor = targetEchoFactor;
+            console.log(`  -> Echo Factor: ${targetEchoFactor.toFixed(2)}`);
+            
+            // 2. Delay Feedback Max - Controls echo persistence
+            const feedbackMaxBase = this.baseSettings.delayFeedbackMaxBase || this.defaultDripSettings.delayFeedbackMaxBase;
+            const feedbackMaxMax = this.baseSettings.delayFeedbackMaxMax || this.defaultDripSettings.delayFeedbackMaxMax;
+            const targetFeedbackMax = this._mapValue(this.moodConfig.intensity, feedbackMaxBase, feedbackMaxMax);
+            this.settings.delayFeedbackMax = targetFeedbackMax;
+            console.log(`  -> Feedback Max: ${targetFeedbackMax.toFixed(2)}`);
+            
+            // 3. Wet Mix - Controls echo prominence
+            const wetMixBase = this.baseSettings.wetMixBase || this.defaultDripSettings.wetMixBase;
+            const wetMixMax = this.baseSettings.wetMixMax || this.defaultDripSettings.wetMixMax;
+            const targetWetMix = this._mapValue(this.moodConfig.intensity, wetMixBase, wetMixMax);
+            
+            // Apply wet mix change immediately if nodes exist
+            if (this.wetGain && this.dryGain) {
+                if (rampTime > 0.01) {
+                    this.wetGain.gain.setTargetAtTime(targetWetMix, now, timeConstant);
+                    this.dryGain.gain.setTargetAtTime(1.0 - targetWetMix, now, timeConstant);
+                } else {
+                    this.wetGain.gain.setValueAtTime(targetWetMix, now);
+                    this.dryGain.gain.setValueAtTime(1.0 - targetWetMix, now);
+                }
+                console.log(`  -> Wet Mix: ${targetWetMix.toFixed(2)} (applied immediately)`);
+            } else {
+                // Store for later use when nodes are created
+                this.settings.wetMix = targetWetMix;
+                console.log(`  -> Wet Mix: ${targetWetMix.toFixed(2)} (stored for later)`);
+            }
+            
+            // Update delay parameters based on new echo settings
+            this._updateDelayParameters(this.settings, rampTime);
+        }
     }
 
     // --- Core Module Methods (AudioEngine Interface) ---
@@ -83,13 +193,14 @@ class AEAmbientWaterDrips {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - The 0-100 configuration for volume/occurrence/intensity.
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -100,8 +211,13 @@ class AEAmbientWaterDrips {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
+            
+            // Store the base settings from data.js
+            this.baseSettings = { ...this.defaultDripSettings, ...initialSettings };
             // Merge initial settings with specific defaults for this module
             this.settings = { ...this.defaultDripSettings, ...initialSettings };
+            // Store the specific 0-100 configuration for this mood
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = initialMood;
 
             // --- Create Core Module Nodes ---
@@ -114,6 +230,10 @@ class AEAmbientWaterDrips {
             this.feedbackGain = this.audioContext.createGain();
             this.wetGain = this.audioContext.createGain();
             this.dryGain = this.audioContext.createGain(); // Gain for the direct signal path
+
+            // --- Apply Initial Mood Config ---
+            // This affects settings before they're used to configure nodes
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             // --- Configure Delay Parameters (Initial) ---
             this._updateDelayParameters(this.settings); // Set initial delay based on settings
@@ -271,8 +391,14 @@ class AEAmbientWaterDrips {
         }
     }
 
-    /** Adapt drip generation parameters to the new mood's settings. */
-    changeMood(newMood, newSettings, transitionTime) {
+    /** 
+     * Adapt drip generation parameters to the new mood's settings. 
+     * @param {string} newMood - The new mood key
+     * @param {object} newSettings - The new mood audio settings
+     * @param {number} transitionTime - Transition time in seconds
+     * @param {object} moodConfig - The 0-100 configuration for volume/occurrence/intensity
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext missing.`);
@@ -283,33 +409,20 @@ class AEAmbientWaterDrips {
             return;
         }
 
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
         try {
+            // Store new base settings from data.js
+            this.baseSettings = { ...this.defaultDripSettings, ...newSettings };
             // Merge new settings with defaults
             this.settings = { ...this.defaultDripSettings, ...newSettings };
+            // Store the new 0-100 configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = newMood;
 
-            const now = this.audioContext.currentTime;
-            const rampTime = transitionTime * 0.6; // Use part of transition for smooth ramps
+            // --- Apply New Mood Config with Transition ---
+            // This will handle volume, occurrence, and intensity with appropriate ramping
+            this._applyMoodConfig(transitionTime);
 
-            // --- Update Module Parameters ---
-            // 1. Overall Volume
-            if (this.moduleOutputGain) {
-                const targetVolume = this.isPlaying ? this.settings.ambientVolume : 0.0001;
-                const gainParam = this.moduleOutputGain.gain;
-                 if (typeof gainParam.cancelAndHoldAtTime === 'function') {
-                     gainParam.cancelAndHoldAtTime(now);
-                 } else {
-                     gainParam.cancelScheduledValues(now);
-                 }
-                gainParam.setTargetAtTime(targetVolume, now, rampTime / 2); // Faster volume ramp
-            }
-
-            // 2. Echo Parameters
-            this._updateDelayParameters(this.settings, rampTime); // Apply new delay settings smoothly
-
-            // 3. Update internal factors derived from settings
-            // These will affect the *next* drip scheduled.
             console.log(`${this.MODULE_ID}: Drip parameters updated for mood '${newMood}'.`);
 
             // Envelope times (attack/release) for the *module* are updated in settings for next play/stop.
@@ -365,6 +478,7 @@ class AEAmbientWaterDrips {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             this.activeDrips.clear(); // Ensure map is cleared
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }

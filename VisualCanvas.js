@@ -3,6 +3,12 @@
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
 // Version: 3.0.0 (Modular Refactor)
 
+// Add the helper function for mapping values
+function mapValue(value0to100, minTarget, maxTarget) {
+    const clampedValue = Math.max(0, Math.min(100, value0to100));
+    return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+}
+
 class VisualCanvas {
     /**
      * @param {HTMLCanvasElement} canvasElement - The canvas element to render to.
@@ -249,48 +255,52 @@ class VisualCanvas {
     // --- Scene Creation and Updates ---
     /**
      * Creates or updates the scene content based on the specified mood.
-     * Disposes old module content and initializes newly enabled modules.
      * @param {string} mood - The target mood key.
      * @param {boolean} [isInitialSetup=false] - If true, skips disposal step.
      */
     createScene(mood, isInitialSetup = false) {
         console.log(`VisualCanvas: ${isInitialSetup ? 'Creating initial' : 'Updating'} scene for mood '${mood}'...`);
-        if (!this.scene) {
+        if (!this.scene) { 
             console.error("VisualCanvas: Scene not initialized, cannot create scene content.");
-            return;
+            return; 
         }
-        // Safely get mood settings and emotion module list
+
         const settings = (typeof moodSettings !== 'undefined' && moodSettings[mood])
             ? moodSettings[mood]
-            : (typeof moodSettings !== 'undefined' ? moodSettings.calm : {}); // Fallback
-        const enabledModuleKeys = (typeof EmotionVisualModules !== 'undefined' && EmotionVisualModules[mood])
+            : (typeof moodSettings !== 'undefined' ? moodSettings.calm : {});
+        const moodModuleConfigs = (typeof EmotionVisualModules !== 'undefined' && EmotionVisualModules[mood])
             ? EmotionVisualModules[mood]
-            : (typeof EmotionVisualModules !== 'undefined' ? EmotionVisualModules.default : []); // Fallback
+            : (typeof EmotionVisualModules !== 'undefined' ? EmotionVisualModules.default : []);
 
-        // --- Update Module Enablement based on EmotionVisualList ---
+        // --- Update Module Enablement & Config ---
         const newlyEnabledModules = [];
         const modulesToDispose = [];
+        const modulesToUpdate = []; // Track modules needing update
+
+        // Create a map of new mood configs for quick lookup
+        const newConfigMap = new Map(moodModuleConfigs.map(cfg => [cfg.module, cfg]));
 
         for (const key in this.moduleConfig) {
-            const shouldBeEnabled = enabledModuleKeys.includes(key);
+            const configFromList = newConfigMap.get(key);
+            const shouldBeEnabled = !!configFromList && (configFromList.occurrence ?? 100) > 0; // Check occurrence > 0
             const isCurrentlyEnabled = this.moduleConfig[key].enabled;
             const instanceExists = !!this.visualModules[key];
 
             if (shouldBeEnabled && !isCurrentlyEnabled) {
-                // Module should be enabled, but isn't currently
                 this.moduleConfig[key].enabled = true;
                 newlyEnabledModules.push(key);
                 console.log(`VisualCanvas: Module '${key}' ENABLED for mood '${mood}'.`);
             } else if (!shouldBeEnabled && isCurrentlyEnabled) {
-                // Module should be disabled, but is currently enabled
                 this.moduleConfig[key].enabled = false;
                 if (instanceExists) {
-                    modulesToDispose.push(key); // Mark for disposal
+                    modulesToDispose.push(key);
                 }
                 console.log(`VisualCanvas: Module '${key}' DISABLED for mood '${mood}'.`);
+            } else if (shouldBeEnabled && isCurrentlyEnabled && instanceExists) {
+                // Module remains enabled, mark for update
+                modulesToUpdate.push(key);
             }
         }
-
 
         // --- Dispose Modules No Longer Enabled ---
         if (!isInitialSetup && modulesToDispose.length > 0) {
@@ -313,13 +323,19 @@ class VisualCanvas {
             console.log(`VisualCanvas: Initializing newly enabled modules: ${newlyEnabledModules.join(', ')}`);
             newlyEnabledModules.forEach(key => {
                 const ModuleClass = this.loadedModules[key];
-                 // Double check class exists and module should be enabled
+                const config = newConfigMap.get(key); // Get the 0-100 config
+                const moodConfig = { // Create the object to pass
+                     occurrence: config.occurrence ?? 100,
+                     intensity: config.intensity ?? 50,
+                     // Volume is generally not applicable to visuals directly here
+                };
                 if (ModuleClass && this.moduleConfig[key].enabled) {
                     try {
-                        console.log(`VisualCanvas: Instantiating/Initializing module '${key}'...`);
+                        console.log(`VisualCanvas: Instantiating/Initializing module '${key}' with config:`, moodConfig);
                         const moduleInstance = new ModuleClass();
-                        moduleInstance.init(this.scene, settings, mood); // Pass mood to init
-                        this.visualModules[key] = moduleInstance; // Store instance
+                        // Pass scene, base settings, mood, AND 0-100 config
+                        moduleInstance.init(this.scene, settings, mood, moodConfig);
+                        this.visualModules[key] = moduleInstance;
                     } catch (error) {
                         console.error(`VisualCanvas: Error initializing newly enabled module '${key}':`, error);
                         this.moduleConfig[key].enabled = false; // Disable if init fails
@@ -333,65 +349,85 @@ class VisualCanvas {
                 }
             });
         }
+
+        // --- Update Modules Remaining Active ---
+        if (!isInitialSetup && modulesToUpdate.length > 0) {
+             console.log(`VisualCanvas: Updating existing modules: ${modulesToUpdate.join(', ')}`);
+             modulesToUpdate.forEach(key => {
+                 const moduleInstance = this.visualModules[key];
+                 const config = newConfigMap.get(key);
+                 const moodConfig = {
+                      occurrence: config.occurrence ?? 100,
+                      intensity: config.intensity ?? 50,
+                 };
+                 if (moduleInstance && typeof moduleInstance.changeMood === 'function') {
+                      try {
+                           console.log(`VisualCanvas: Calling changeMood on module '${key}' with config:`, moodConfig);
+                           // Pass new base settings AND new 0-100 config
+                           moduleInstance.changeMood(mood, settings, 1.0, moodConfig); // Use a default transition time or pass from engine
+                      } catch (error) {
+                           console.error(`VisualCanvas: Error calling changeMood on module '${key}':`, error);
+                           if (typeof ToastSystem !== 'undefined') ToastSystem.notify('error', `Visual module '${key}' failed during update.`);
+                           // Optionally dispose and re-init as a fallback
+                      }
+                 } else if (moduleInstance) {
+                      console.warn(`VisualCanvas: Module '${key}' has no changeMood method. Re-initializing as fallback.`);
+                      // Fallback: Dispose and re-initialize
+                      if (typeof moduleInstance.dispose === 'function') moduleInstance.dispose(this.scene);
+                      delete this.visualModules[key];
+                      const ModuleClass = this.loadedModules[key];
+                      if (ModuleClass) {
+                           const newInstance = new ModuleClass();
+                           newInstance.init(this.scene, settings, mood, moodConfig);
+                           this.visualModules[key] = newInstance;
+                      }
+                 }
+             });
+        }
+
         console.log(`VisualCanvas: Scene ${isInitialSetup ? 'created' : 'updated'} for mood:`, mood);
     }
 
     /**
-     * Changes the active mood, updating settings and recreating scene elements.
+     * Changes the active mood, updating settings and recreating/updating scene elements.
      * @param {string} mood - The new mood key.
      * @param {boolean} [isInitialSetup=false] - Indicates if this is the first setup.
      */
     changeMood(mood, isInitialSetup = false) {
-        // Basic validation
         if (!mood || (typeof moodSettings === 'undefined') || !moodSettings[mood]) {
             console.warn(`VisualCanvas: Invalid or unknown mood '${mood}'. Using previous: '${this.currentMood}'.`);
-            if (typeof ToastSystem !== 'undefined') ToastSystem.notify('warning', `Invalid mood: ${mood}`);
+            if (typeof ToastSystem !== 'undefined') ToastSystem.notify('warning', `Invalid visual mood: ${mood}`);
             return;
         }
-        // Prevent unnecessary changes unless it's the initial setup call
         if (mood === this.currentMood && !isInitialSetup) {
-             console.log(`VisualCanvas: Mood '${mood}' is already active.`);
-             return;
+            console.log(`VisualCanvas: Visual mood '${mood}' is already active.`);
+            return;
         }
 
-        console.log(`VisualCanvas: Changing mood from '${this.currentMood}' to '${mood}' ${isInitialSetup ? '(Initial Setup)' : ''}`);
+        console.log(`VisualCanvas: Changing visual mood from '${this.currentMood}' to '${mood}' ${isInitialSetup ? '(Initial Setup)' : ''}`);
         this.currentMood = mood;
 
-        // Update connector mood (even if visual canvas mood doesn't change, connector might need update)
-        if (this.audioVisualConnector) {
-             this.audioVisualConnector.setMood(mood);
-        } else {
-             console.error("VisualCanvas: Cannot set mood on connector - instance missing.");
-        }
-
-
-        // Update core components based on new mood settings
-        const settings = moodSettings[this.currentMood]; // Get settings for the *new* mood
-
-        // Update fog and background (handled by lighting module now, but set defaults)
-        if (this.scene) {
-             this.scene.fog = null; // Let lighting module handle fog creation/update
-             this.scene.background = new THREE.Color(settings.fogColor || '#000000').multiplyScalar(0.8); // Default background
-        }
-
-        // Update controls based on base speed setting for the new mood
-        if (this.controls) {
-            this.controls.autoRotateSpeed = (settings.speed || 0.6) * 0.1; // Apply base speed immediately
-        }
-        // Update camera distance based on new mood settings
-         if (this.camera) {
-             // TODO: Add smooth camera transition later if desired
-             this.camera.position.z = settings.cameraDistance || 30;
-             this.camera.lookAt(0,0,0); // Ensure camera looks at origin after position change
-         }
-         // Update base bloom strength (lighting module might override this in its update)
-         if (this.bloomPass) {
-              const baseBloom = settings.bloom || 0.7;
-              this.bloomPass.strength = baseBloom * (this.performance.pixelRatioLimit > 1.5 ? 1.2 : 1.0); // Base bloom slightly higher on better GPUs
-         }
-
         // Recreate/update scene content using modules based on EmotionVisualList
+        // The createScene method now handles the logic for init/update/dispose based on the new mood list
         this.createScene(mood, isInitialSetup);
+
+         // Update core components based on new mood settings immediately
+         const settings = moodSettings[this.currentMood];
+         if (this.controls) {
+             this.controls.autoRotateSpeed = (settings.speed || 0.6) * 0.1;
+         }
+         if (this.camera) {
+             this.camera.position.z = settings.cameraDistance || 30;
+             this.camera.lookAt(0,0,0);
+         }
+         if (this.bloomPass) {
+             this.bloomPass.strength = settings.bloom || 0.7;
+         }
+         if (this.scene) {
+              // Reset fog/background, let lighting module handle it in its next update/init
+              this.scene.fog = null;
+              this.scene.background = new THREE.Color(settings.fogColor || '#000000').multiplyScalar(0.8);
+         }
     }
 
     // --- Animation Loop ---

@@ -1,7 +1,7 @@
 // ae_ambientInsectsNight.js - Audio Module for Night Insect Ambience
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
+// Version: 1.0.3 (Added Volume/Occurrence/Intensity control system)
 
 /**
  * @class AEAmbientInsectsNight
@@ -16,9 +16,12 @@ class AEAmbientInsectsNight {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store base settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        // Added mood configuration with default values
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 };
 
         // --- Core Audio Nodes ---
         this.outputGain = null;     // Master gain for this module (volume and overall fades)
@@ -60,22 +63,105 @@ class AEAmbientInsectsNight {
             // Mood Variation Hint (can be used in update/changeMood)
             densityFactor: 1.0,       // Multiplier for chirp rate (can be adjusted by mood)
             pitchFactor: 1.0,         // Multiplier for frequency range (can be adjusted by mood)
+            // Base/Max values for intensity mapping
+            densityFactorBase: 1.0,   // Base density factor (for 50% intensity)
+            densityFactorMax: 2.5,    // Maximum density factor (for 100% intensity)
+            pitchFactorBase: 0.8,     // Base pitch factor (for 50% intensity)
+            pitchFactorMax: 1.5,      // Maximum pitch factor (for 100% intensity)
+            panSpreadBase: 0.5,       // Base pan spread (for 50% intensity)
+            panSpreadMax: 1.0,        // Maximum pan spread (for 100% intensity)
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
+    }
+
+    /**
+     * Maps a value from 0-100 range to a target range
+     * @param {number} value0to100 - Input value between 0 and 100
+     * @param {number} minTarget - Minimum value in target range
+     * @param {number} maxTarget - Maximum value in target range
+     * @returns {number} - Mapped value in target range
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the 0-100 mood configuration to audio parameters
+     * @param {number} transitionTime - Time in seconds for parameter transitions
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.baseSettings) return;
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0; // Shorter ramp for config changes
+        const timeConstant = rampTime / 3.0;
+
+        // --- Apply Volume ---
+        if (this.outputGain && this.moodConfig.volume !== undefined) {
+            // Map 0-100 volume to 0-baseVolume
+            const baseVolume = this.baseSettings.ambientVolume || this.defaultInsectSettings.ambientVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0001, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (rampTime > 0.01 && this.isPlaying) {
+                this.outputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+            } else {
+                this.outputGain.gain.setValueAtTime(targetVolume, now);
+            }
+        }
+
+        // --- Apply Occurrence (Density of Chirps) ---
+        if (this.moodConfig.occurrence !== undefined) {
+            const baseDensity = this.baseSettings.densityFactorBase || this.defaultInsectSettings.densityFactorBase;
+            const maxDensity = this.baseSettings.densityFactorMax || this.defaultInsectSettings.densityFactorMax;
+            
+            // Map 0-100 occurrence to a density factor range
+            // 0 = very sparse, 100 = very dense
+            this.settings.densityFactor = this._mapValue(this.moodConfig.occurrence, 0.1, maxDensity);
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> densityFactor ${this.settings.densityFactor.toFixed(2)}`);
+            
+            // Note: Density affects the timing between chirp clusters which will 
+            // be applied in the next scheduled chirp cycle
+        }
+
+        // --- Apply Intensity (Pitch Range and Pan Spread) ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Pitch Factor - affects the frequency range of chirps
+            const basePitch = this.baseSettings.pitchFactorBase || this.defaultInsectSettings.pitchFactorBase;
+            const maxPitch = this.baseSettings.pitchFactorMax || this.defaultInsectSettings.pitchFactorMax;
+            this.settings.pitchFactor = this._mapValue(this.moodConfig.intensity, basePitch, maxPitch);
+            console.log(`  -> Pitch Factor: ${this.settings.pitchFactor.toFixed(2)}`);
+            
+            // 2. Pan Spread - affects the stereo width/spatialization of chirps
+            const basePanSpread = this.baseSettings.panSpreadBase || this.defaultInsectSettings.panSpreadBase;
+            const maxPanSpread = this.baseSettings.panSpreadMax || this.defaultInsectSettings.panSpreadMax;
+            this.settings.panSpread = this._mapValue(this.moodConfig.intensity, basePanSpread, maxPanSpread);
+            console.log(`  -> Pan Spread: ${this.settings.panSpread.toFixed(2)}`);
+            
+            // Note: These will affect new chirps as they are created
+        }
     }
 
     // --- Core Module Methods (AudioEngine Interface) ---
 
     /**
      * Initialize audio nodes based on initial mood settings.
+     * @param {AudioContext} audioContext - The Web Audio context
+     * @param {AudioNode} masterOutputNode - The destination node to connect to
+     * @param {Object} initialSettings - Initial audio settings
+     * @param {string} initialMood - Name of the initial mood
+     * @param {Object} moodConfig - 0-100 configuration for volume/occurrence/intensity
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -86,8 +172,13 @@ class AEAmbientInsectsNight {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            // Merge initial settings with specific defaults for this module
-            this.settings = { ...this.defaultInsectSettings, ...initialSettings };
+            
+            // Store base settings from data.js
+            this.baseSettings = { ...this.defaultInsectSettings, ...initialSettings };
+            // Store the current settings (will be modified by _applyMoodConfig)
+            this.settings = { ...this.baseSettings };
+            // Store the mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = initialMood;
 
             // --- Create Core Nodes ---
@@ -97,6 +188,9 @@ class AEAmbientInsectsNight {
             // --- Connect Audio Graph ---
             // Individual chirps will connect directly to this outputGain
             this.outputGain.connect(this.masterOutput);
+
+            // --- Apply Initial Mood Config ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             this.isEnabled = true;
             console.log(`${this.MODULE_ID}: Initialization complete.`);
@@ -145,7 +239,10 @@ class AEAmbientInsectsNight {
 
             // Apply module attack envelope
             const attackTime = this.settings.attackTime || this.defaultInsectSettings.attackTime;
-            const targetVolume = this.settings.ambientVolume || this.defaultInsectSettings.ambientVolume;
+            // Use volume from moodConfig
+            const baseVolume = this.baseSettings.ambientVolume || this.defaultInsectSettings.ambientVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0001, baseVolume);
+            
             this.outputGain.gain.cancelScheduledValues(this.nextChirpTime);
             this.outputGain.gain.setValueAtTime(0.0001, this.nextChirpTime); // Start from silence
             this.outputGain.gain.linearRampToValueAtTime(targetVolume, this.nextChirpTime + attackTime);
@@ -223,8 +320,14 @@ class AEAmbientInsectsNight {
         }
     }
 
-    /** Adapt chirp generation parameters to the new mood's settings. */
-    changeMood(newMood, newSettings, transitionTime) {
+    /**
+     * Adapt chirp generation parameters to the new mood's settings.
+     * @param {string} newMood - The name of the new mood
+     * @param {Object} newSettings - Audio settings for the new mood
+     * @param {number} transitionTime - Time in seconds for the transition
+     * @param {Object} moodConfig - 0-100 configuration for volume/occurrence/intensity
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext missing.`);
@@ -235,29 +338,20 @@ class AEAmbientInsectsNight {
             return;
         }
 
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s. Config:`, moodConfig);
         try {
-            // Merge new settings with defaults
-            this.settings = { ...this.defaultInsectSettings, ...newSettings };
+            // Store the base settings from data.js
+            this.baseSettings = { ...this.defaultInsectSettings, ...newSettings };
+            // Update settings (will be modified by _applyMoodConfig)
+            this.settings = { ...this.baseSettings };
+            // Store the new mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = newMood;
 
-            const now = this.audioContext.currentTime;
-            const rampTime = transitionTime * 0.5; // Use part of transition for volume ramp
+            // Apply the new mood configuration with transition time
+            this._applyMoodConfig(transitionTime);
 
-            // --- Update Module Parameters ---
-            // 1. Overall Volume
-            if (this.outputGain) {
-                const targetVolume = this.isPlaying ? this.settings.ambientVolume : 0.0001;
-                this.outputGain.gain.cancelScheduledValues(now);
-                this.outputGain.gain.setTargetAtTime(targetVolume, now, rampTime / 2); // Faster volume ramp
-            }
-
-            // 2. Update internal parameters derived from settings
-            // These will affect the *next* chirp cluster generated.
-            // No need to change currently sounding chirps.
             console.log(`${this.MODULE_ID}: Chirp parameters updated for mood '${newMood}'.`);
-
-            // Envelope times (attack/release) for the *module* are updated in settings for next play/stop.
 
         } catch (error) {
             console.error(`${this.MODULE_ID}: Error during changeMood():`, error);
@@ -303,6 +397,7 @@ class AEAmbientInsectsNight {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             this.activeChirps.clear(); // Ensure map is cleared
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }
@@ -317,7 +412,7 @@ class AEAmbientInsectsNight {
         // Calculate random delay until the next cluster
         const minInterval = this.settings.chirpIntervalMin || 0.25;
         const maxInterval = this.settings.chirpIntervalMax || 1.3;
-        const density = this.settings.densityFactor || 1.0; // Apply density factor
+        const density = this.settings.densityFactor || 1.0; // Apply density factor from moodConfig
         const interval = (minInterval + Math.random() * (maxInterval - minInterval)) / Math.max(0.1, density); // Inverse relationship with density
         const scheduledTime = this.nextChirpTime + interval;
 
@@ -362,7 +457,7 @@ class AEAmbientInsectsNight {
             // Calculate parameters for this specific chirp
             const freqMin = this.settings.chirpFrequencyMin || 2800;
             const freqMax = this.settings.chirpFrequencyMax || 4800;
-            const pitchFactor = this.settings.pitchFactor || 1.0;
+            const pitchFactor = this.settings.pitchFactor || 1.0; // Apply pitch factor from moodConfig
             const frequency = (freqMin + Math.random() * (freqMax - freqMin)) * pitchFactor;
 
             // Note: chirpDuration is less relevant now, envelope defines sound length
@@ -374,6 +469,7 @@ class AEAmbientInsectsNight {
             const volMax = this.settings.chirpVolumeMax || 1.0;
             const volume = volMin + Math.random() * (volMax - volMin);
 
+            // Use panSpread from moodConfig for wider/narrower stereo image
             const pan = (Math.random() - 0.5) * 2.0 * (this.settings.panSpread || 0.7);
 
             // Calculate slightly offset intended start time within the cluster spread

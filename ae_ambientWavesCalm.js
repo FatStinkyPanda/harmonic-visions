@@ -1,7 +1,7 @@
 // ae_ambientWavesCalm.js - Audio Module for Calm Ocean Waves Ambience
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.0 (Initial Implementation)
+// Version: 1.0.1 (Updated with Vol/Occur/Inten System)
 
 /**
  * @class AEAmbientWavesCalm
@@ -16,9 +16,13 @@ class AEAmbientWavesCalm {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store original unmodified settings
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // Added moodConfig system
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes ---
         this.outputGain = null;     // Master gain for this module (volume and fades)
@@ -69,6 +73,19 @@ class AEAmbientWavesCalm {
             // Uniqueness/Variation Parameters
             filterFreqRandomness: 0.1, // +/- 10% random variation on filter freqs at init/mood change
             lfoRateRandomness: 0.15,   // +/- 15% random variation on LFO rates at init/mood change
+            
+            // Added base/max value pairs for intensity mapping
+            baseFilterQMin: 0.7,    // Min Q for base filter (at intensity 0)
+            baseFilterQMax: 1.5,    // Max Q for base filter (at intensity 100)
+            washFilterQMin: 0.8,    // Min Q for wash filter (at intensity 0)
+            washFilterQMax: 2.5,    // Max Q for wash filter (at intensity 100)
+            rhythmLFODepthMin: 0.3, // Min modulation depth (at intensity 0)
+            rhythmLFODepthMax: 1.0, // Max modulation depth (at intensity 100)
+            washFilterFreqMin: 1200, // Min wash filter frequency (at intensity 0)
+            washFilterFreqMax: 2500, // Max wash filter frequency (at intensity 100)
+            // Occurrence (wave activity)
+            rhythmLFORateMin: 0.04, // Min rhythm rate (at occurrence 0)
+            rhythmLFORateMax: 0.14, // Max rhythm rate (at occurrence 100)
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
@@ -77,18 +94,178 @@ class AEAmbientWavesCalm {
     // --- Core Module Methods (AudioEngine Interface) ---
 
     /**
+     * Maps a value from 0-100 range to a target range (min-max)
+     * @param {number} value0to100 - Input value (0-100)
+     * @param {number} minTarget - Target range minimum
+     * @param {number} maxTarget - Target range maximum
+     * @returns {number} Mapped value in target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the volume/occurrence/intensity mood configuration
+     * @param {number} transitionTime - Time in seconds for parameter transitions
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.baseSettings) return;
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.7 : 0;
+        const timeConstant = rampTime / 3.0;
+
+        // --- Apply Volume ---
+        if (this.outputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings.ambientVolume || this.defaultWaveSettings.ambientVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (this.isPlaying) {
+                // Only use transition if we're playing and transition time is significant
+                if (rampTime > 0.01) {
+                    this.outputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+                } else {
+                    this.outputGain.gain.setValueAtTime(targetVolume, now);
+                }
+            } else {
+                // Store for next play() but don't change current gain
+                this.settings.ambientVolume = targetVolume;
+            }
+        }
+
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100`);
+            
+            // For waves, occurrence affects rhythm rate (wave frequency/activity)
+            const rhythmRateMin = this.baseSettings.rhythmLFORateMin || this.defaultWaveSettings.rhythmLFORateMin;
+            const rhythmRateMax = this.baseSettings.rhythmLFORateMax || this.defaultWaveSettings.rhythmLFORateMax;
+            const targetRhythmRate = this._mapValue(this.moodConfig.occurrence, rhythmRateMin, rhythmRateMax);
+            
+            // Apply with randomization factor from settings
+            const rateRandFactor = 1.0 + (Math.random() - 0.5) * 2.0 * 
+                (this.baseSettings.lfoRateRandomness || this.defaultWaveSettings.lfoRateRandomness);
+            const effectiveRhythmRate = targetRhythmRate * rateRandFactor;
+            
+            console.log(`  -> Rhythm Rate: ${effectiveRhythmRate.toFixed(3)} Hz (${(1/effectiveRhythmRate).toFixed(1)}s cycle)`);
+            
+            // Update the rhythm LFOs if they exist
+            this.lfoNodes.forEach(lfoData => {
+                if (lfoData.description && lfoData.description.includes('rhythm') && lfoData.lfo) {
+                    if (rampTime > 0.01) {
+                        lfoData.lfo.frequency.setTargetAtTime(effectiveRhythmRate, now, timeConstant);
+                    } else {
+                        lfoData.lfo.frequency.setValueAtTime(effectiveRhythmRate, now);
+                    }
+                }
+            });
+            
+            // Store in settings for recreation if needed
+            this.settings.rhythmLFORateBase = targetRhythmRate;
+        }
+
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Filter Q values (resonance)
+            if (this.baseLayer.filter) {
+                const baseQMin = this.baseSettings.baseFilterQMin || this.defaultWaveSettings.baseFilterQMin;
+                const baseQMax = this.baseSettings.baseFilterQMax || this.defaultWaveSettings.baseFilterQMax;
+                const targetBaseQ = this._mapValue(this.moodConfig.intensity, baseQMin, baseQMax);
+                
+                console.log(`  -> Base Filter Q: ${targetBaseQ.toFixed(2)}`);
+                if (rampTime > 0.01) {
+                    this.baseLayer.filter.Q.setTargetAtTime(targetBaseQ, now, timeConstant);
+                } else {
+                    this.baseLayer.filter.Q.setValueAtTime(targetBaseQ, now);
+                }
+            }
+            
+            if (this.washLayer.filter) {
+                const washQMin = this.baseSettings.washFilterQMin || this.defaultWaveSettings.washFilterQMin;
+                const washQMax = this.baseSettings.washFilterQMax || this.defaultWaveSettings.washFilterQMax;
+                const targetWashQ = this._mapValue(this.moodConfig.intensity, washQMin, washQMax);
+                
+                console.log(`  -> Wash Filter Q: ${targetWashQ.toFixed(2)}`);
+                if (rampTime > 0.01) {
+                    this.washLayer.filter.Q.setTargetAtTime(targetWashQ, now, timeConstant);
+                } else {
+                    this.washLayer.filter.Q.setValueAtTime(targetWashQ, now);
+                }
+                
+                // Also adjust wash filter frequency with intensity
+                const washFreqMin = this.baseSettings.washFilterFreqMin || this.defaultWaveSettings.washFilterFreqMin;
+                const washFreqMax = this.baseSettings.washFilterFreqMax || this.defaultWaveSettings.washFilterFreqMax;
+                const targetWashFreq = this._mapValue(this.moodConfig.intensity, washFreqMin, washFreqMax);
+                
+                console.log(`  -> Wash Filter Freq: ${targetWashFreq.toFixed(0)} Hz`);
+                if (rampTime > 0.01) {
+                    this.washLayer.filter.frequency.setTargetAtTime(targetWashFreq, now, timeConstant);
+                } else {
+                    this.washLayer.filter.frequency.setValueAtTime(targetWashFreq, now);
+                }
+            }
+            
+            // 2. LFO modulation depths (wave intensity)
+            const depthMin = this.baseSettings.rhythmLFODepthMin || this.defaultWaveSettings.rhythmLFODepthMin;
+            const depthMax = this.baseSettings.rhythmLFODepthMax || this.defaultWaveSettings.rhythmLFODepthMax;
+            const targetModDepthFactor = this._mapValue(this.moodConfig.intensity, depthMin, depthMax);
+            
+            console.log(`  -> Modulation Depth Factor: ${targetModDepthFactor.toFixed(2)}`);
+            
+            // Find and update rhythm LFO gains (modulation depths)
+            this.lfoNodes.forEach(lfoData => {
+                if (!lfoData.gain) return;
+                
+                if (lfoData.description && lfoData.description.includes('Wash Gain')) {
+                    // Scale gain modulation by the target depth factor and washGainLevel
+                    const baseWashGain = this.baseSettings.washGainLevel || this.defaultWaveSettings.washGainLevel;
+                    const targetDepth = targetModDepthFactor * baseWashGain;
+                    
+                    if (rampTime > 0.01) {
+                        lfoData.gain.gain.setTargetAtTime(targetDepth, now, timeConstant);
+                    } else {
+                        lfoData.gain.gain.setValueAtTime(targetDepth, now);
+                    }
+                }
+                else if (lfoData.description && lfoData.description.includes('Wash Filter')) {
+                    // Scale filter modulation by the target depth factor
+                    const baseFilterDepth = this.baseSettings.rhythmLFOWashFilterDepth || 
+                                            this.defaultWaveSettings.rhythmLFOWashFilterDepth;
+                    const targetDepth = baseFilterDepth * targetModDepthFactor;
+                    
+                    if (rampTime > 0.01) {
+                        lfoData.gain.gain.setTargetAtTime(targetDepth, now, timeConstant);
+                    } else {
+                        lfoData.gain.gain.setValueAtTime(targetDepth, now);
+                    }
+                }
+            });
+            
+            // Store these values for future reference
+            this.settings.currentIntensityFactor = targetModDepthFactor;
+        }
+    }
+
+    /**
      * Initialize audio nodes, generate noise buffer, and set up the audio graph.
      * @param {AudioContext} audioContext - The shared AudioContext.
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - Volume/Occurrence/Intensity configuration (0-100 values)
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -99,8 +276,13 @@ class AEAmbientWavesCalm {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            // Merge initial settings with specific defaults for this module
-            this.settings = { ...this.defaultWaveSettings, ...initialSettings };
+            
+            // Store the base settings from data.js
+            this.baseSettings = { ...this.defaultWaveSettings, ...initialSettings };
+            // Store settings that will be modified by moodConfig
+            this.settings = { ...this.baseSettings };
+            // Store the specific 0-100 configuration for this mood
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = initialMood;
 
             // --- Generate Noise Buffer ---
@@ -123,6 +305,9 @@ class AEAmbientWavesCalm {
 
             // --- Create LFOs ---
             this._createLFOs(this.settings); // Creates rhythm and pan LFOs/gains
+
+            // --- Apply Initial Mood Config ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             // --- Connect Audio Graph ---
             // Noise Source (created in play) -> Base Filter -> Base Gain -> Panner
@@ -248,6 +433,7 @@ class AEAmbientWavesCalm {
 
             // --- Apply Attack Envelope ---
             const attackTime = this.settings.attackTime || this.defaultWaveSettings.attackTime;
+            // Get volume from settings (after _applyMoodConfig has potentially modified it)
             const targetVolume = this.settings.ambientVolume || this.defaultWaveSettings.ambientVolume;
             const timeConstant = attackTime / 3.0; // Time constant for smoother exponential ramp-up
 
@@ -339,8 +525,9 @@ class AEAmbientWavesCalm {
      * @param {string} newMood - The key of the new mood.
      * @param {object} newSettings - The moodAudioSettings for the new mood.
      * @param {number} transitionTime - Duration for the transition in seconds.
+     * @param {object} moodConfig - Volume/Occurrence/Intensity configuration (0-100 values)
      */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is missing.`);
@@ -350,79 +537,55 @@ class AEAmbientWavesCalm {
            console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is closed.`);
            return;
         }
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
 
         try {
-            // Merge new settings with defaults
+            // Store the base settings from data.js
+            this.baseSettings = { ...this.defaultWaveSettings, ...newSettings };
+            // Merge new settings with defaults (preserving modified values)
             this.settings = { ...this.defaultWaveSettings, ...newSettings };
+            // Store the specific 0-100 configuration for this mood
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.currentMood = newMood;
+
+            // --- Apply New Mood Config with Transition ---
+            this._applyMoodConfig(transitionTime);
 
             const now = this.audioContext.currentTime;
             // Use a significant portion of transition time for smooth ramps
             const rampTime = Math.max(0.1, transitionTime * 0.7);
             const shortRampTime = rampTime / 2.0; // Faster ramp for volume/gain levels
 
-            // --- Update Module Parameters ---
-
-            // 1. Overall Volume
-            if (this.outputGain) {
-                const targetVolume = this.isPlaying ? this.settings.ambientVolume : 0.0001;
-                this.outputGain.gain.cancelScheduledValues(now);
-                this.outputGain.gain.setTargetAtTime(targetVolume, now, shortRampTime);
-            }
-
-            // 2. Base Layer Filter & Gain
+            // --- Update Base Filter Frequency (not handled by _applyMoodConfig) ---
             const freqRand = 1.0 + (Math.random() - 0.5) * 2.0 * (this.settings.filterFreqRandomness || 0);
             if (this.baseLayer.filter) {
                 this.baseLayer.filter.frequency.setTargetAtTime(this.settings.baseFilterFreq * freqRand, now, rampTime);
-                this.baseLayer.filter.Q.setTargetAtTime(this.settings.baseFilterQ, now, rampTime);
             }
+
+            // --- Update Base Gain Levels (separate from LFO modulation depths) ---
             if (this.baseLayer.gain) {
                 this.baseLayer.gain.gain.setTargetAtTime(this.settings.baseGainLevel, now, shortRampTime);
             }
-
-            // 3. Wash Layer Filter & Gain
-            if (this.washLayer.filter) {
-                const washFreqRand = 1.0 + (Math.random() - 0.5) * 2.0 * (this.settings.filterFreqRandomness || 0);
-                const washQRand = 1.0 + (Math.random() - 0.5) * 2.0 * (this.settings.filterFreqRandomness || 0); // Apply randomness to Q too
-                const targetWashFreq = (this.settings.washFilterFreqBase + Math.random() * this.settings.washFilterFreqRange) * washFreqRand;
-                const targetWashQ = (this.settings.washFilterQBase + Math.random() * this.settings.washFilterQRange) * washQRand;
-
-                 // Check if filter TYPE needs to change (immediate change)
-                 const newFilterType = this.settings.washFilterType || 'bandpass';
-                 if (this.washLayer.filter.type !== newFilterType) {
-                     console.warn(`${this.MODULE_ID}: Wash filter type changed (${this.washLayer.filter.type} -> ${newFilterType}). Changing immediately.`);
-                     this.washLayer.filter.type = newFilterType;
-                 }
-
-                this.washLayer.filter.frequency.setTargetAtTime(targetWashFreq, now, rampTime);
-                this.washLayer.filter.Q.setTargetAtTime(targetWashQ, now, rampTime);
-            }
-            if (this.washLayer.gain) {
-                this.washLayer.gain.gain.setTargetAtTime(this.settings.washGainLevel, now, shortRampTime);
+            
+            // Base wash gain level (the LFO modulates around this)
+            if (this.washLayer.gain && !this.isPlaying) {
+                // Only directly set if not playing (otherwise let LFO handle it)
+                this.washLayer.gain.gain.setTargetAtTime(this.settings.washGainLevel * 0.1, now, shortRampTime);
             }
 
-            // 4. LFOs
+            // --- Update Pan LFO Parameters ---
             const lfoRateRand = 1.0 + (Math.random() - 0.5) * 2.0 * (this.settings.lfoRateRandomness || 0);
             this.lfoNodes.forEach(lfoData => {
                 if (!lfoData || !lfoData.lfo || !lfoData.gain) return;
 
-                let targetRate = 0, targetDepth = 0;
-                if (lfoData.description === 'rhythm') {
-                    targetRate = (this.settings.rhythmLFORateBase + Math.random() * this.settings.rhythmLFORateRange) * lfoRateRand;
-                    // Find which parameter this LFO's gain node controls
-                    if (lfoData.target === this.washLayer.gain?.gain) {
-                        targetDepth = this.settings.rhythmLFOWashGainDepth;
-                    } else if (lfoData.target === this.washLayer.filter?.frequency) {
-                        targetDepth = this.settings.rhythmLFOWashFilterDepth;
-                    }
-                } else if (lfoData.description === 'pan') {
-                    targetRate = this.settings.panLFORate * lfoRateRand;
-                    targetDepth = this.settings.panLFODepth;
+                // Update pan LFO separately (not handled by _applyMoodConfig)
+                if (lfoData.description === 'pan') {
+                    const targetRate = this.settings.panLFORate * lfoRateRand;
+                    const targetDepth = this.settings.panLFODepth;
+                    
+                    lfoData.lfo.frequency.setTargetAtTime(targetRate, now, rampTime);
+                    lfoData.gain.gain.setTargetAtTime(targetDepth, now, rampTime);
                 }
-
-                if (targetRate > 0) lfoData.lfo.frequency.setTargetAtTime(targetRate, now, rampTime);
-                if (targetDepth > 0 && lfoData.target) lfoData.gain.gain.setTargetAtTime(targetDepth, now, rampTime);
             });
 
             // Envelope times (attack/release) are updated in settings for next play/stop.
@@ -475,6 +638,7 @@ class AEAmbientWavesCalm {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }
     }

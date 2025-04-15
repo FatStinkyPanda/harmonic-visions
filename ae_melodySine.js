@@ -1,7 +1,7 @@
 // ae_melodySine.js - Audio Module for Simple Sine Wave Melodies
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.1.2 (Fixed timing issues with lookahead scheduling)
+// Version: 1.1.3 (Added volume/occurrence/intensity configuration)
 
 /**
  * @class AEMelodySine
@@ -15,9 +15,13 @@ class AEMelodySine {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // NEW: Store original settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // NEW: Add mood configuration property with default values
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 };
 
         // --- Core Audio Nodes ---
         this.moduleOutputGain = null; // Master gain for this module (controls overall melody volume)
@@ -51,9 +55,15 @@ class AEMelodySine {
             releaseTime: 0.25,        // Release time after note duration ends
             vibratoRate: 4.5,         // Hz
             vibratoDepth: 2.0,        // Cents (subtle)
+            vibratoDepthBase: 1.0,    // NEW: Base vibrato depth for min intensity
+            vibratoDepthMax: 6.0,     // NEW: Max vibrato depth for max intensity
             delayTime: 0.33,          // Seconds
             delayFeedback: 0.28,      // 0 to < 1
+            delayFeedbackBase: 0.15,  // NEW: Base delay feedback for min intensity
+            delayFeedbackMax: 0.6,    // NEW: Max delay feedback for max intensity
             delayWetMix: 0.35,        // 0 to 1
+            delayWetMixBase: 0.1,     // NEW: Base delay wet mix for min intensity
+            delayWetMixMax: 0.7,      // NEW: Max delay wet mix for max intensity
             tempo: 85,                // BPM (fallback)
             scale: 'pentatonicMinor', // Fallback scale (add to data.js if needed)
             baseFreq: 440,            // A4 (fallback)
@@ -66,9 +76,110 @@ class AEMelodySine {
                 ]
             ],
             humanizeTiming: 0.01,    // Max random timing offset (seconds) for humanization (optional)
+            noteProbability: 1.0,     // NEW: Base probability for notes to play (1.0 = always play)
+            noteProbabilityMin: 0.3,  // NEW: Min probability when occurrence is 0
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
+    }
+
+    // --- NEW: Helper method to map 0-100 values to specific parameter ranges ---
+    /**
+     * Maps a value in 0-100 range to a target parameter range
+     * @param {number} value0to100 - Value between 0-100
+     * @param {number} minTarget - Minimum target value
+     * @param {number} maxTarget - Maximum target value
+     * @returns {number} - Mapped value within target range
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    // --- NEW: Method to apply mood configuration to audio parameters ---
+    /**
+     * Applies the mood configuration (volume/occurrence/intensity) to audio parameters
+     * @param {number} transitionTime - Time in seconds for parameter transitions
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.baseSettings) return;
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0; // Shorter ramp for config changes
+        const timeConstant = rampTime / 3.0;
+
+        // --- Apply Volume ---
+        if (this.moduleOutputGain && this.moodConfig.volume !== undefined) {
+            // Map volume from 0-100 to 0-baseVolume
+            const baseVolume = this.baseSettings.melodyVolume || this.defaultMelodySettings.melodyVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (rampTime > 0.01) {
+                this.moduleOutputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+            } else {
+                this.moduleOutputGain.gain.setValueAtTime(targetVolume, now);
+            }
+        }
+
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            // For melody, occurrence affects the probability of notes actually playing
+            const baseProbability = this.baseSettings.noteProbability || this.defaultMelodySettings.noteProbability;
+            const minProbability = this.baseSettings.noteProbabilityMin || this.defaultMelodySettings.noteProbabilityMin;
+            this.settings.noteProbability = this._mapValue(this.moodConfig.occurrence, minProbability, baseProbability);
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> noteProbability ${this.settings.noteProbability.toFixed(2)}`);
+            // The probability will be used in _playNextNoteInSequence to determine if notes actually sound
+        }
+
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Vibrato Depth
+            if (this.vibratoGain) {
+                const baseDepth = this.baseSettings.vibratoDepthBase || this.defaultMelodySettings.vibratoDepthBase;
+                const maxDepth = this.baseSettings.vibratoDepthMax || this.defaultMelodySettings.vibratoDepthMax;
+                const targetDepth = this._mapValue(this.moodConfig.intensity, baseDepth, maxDepth);
+                console.log(`  -> Vibrato Depth: ${targetDepth.toFixed(2)} cents`);
+                
+                if (rampTime > 0.01) {
+                    this.vibratoGain.gain.setTargetAtTime(targetDepth, now, timeConstant);
+                } else {
+                    this.vibratoGain.gain.setValueAtTime(targetDepth, now);
+                }
+            }
+            
+            // 2. Delay Feedback
+            if (this.feedbackGain) {
+                const baseFeedback = this.baseSettings.delayFeedbackBase || this.defaultMelodySettings.delayFeedbackBase;
+                const maxFeedback = this.baseSettings.delayFeedbackMax || this.defaultMelodySettings.delayFeedbackMax;
+                const targetFeedback = this._mapValue(this.moodConfig.intensity, baseFeedback, maxFeedback);
+                console.log(`  -> Delay Feedback: ${targetFeedback.toFixed(2)}`);
+                
+                if (rampTime > 0.01) {
+                    this.feedbackGain.gain.setTargetAtTime(targetFeedback, now, timeConstant);
+                } else {
+                    this.feedbackGain.gain.setValueAtTime(targetFeedback, now);
+                }
+            }
+            
+            // 3. Delay Wet Mix
+            if (this.delayWetGain) {
+                const baseWet = this.baseSettings.delayWetMixBase || this.defaultMelodySettings.delayWetMixBase;
+                const maxWet = this.baseSettings.delayWetMixMax || this.defaultMelodySettings.delayWetMixMax;
+                const targetWet = this._mapValue(this.moodConfig.intensity, baseWet, maxWet);
+                console.log(`  -> Delay Wet Mix: ${targetWet.toFixed(2)}`);
+                
+                if (rampTime > 0.01) {
+                    this.delayWetGain.gain.setTargetAtTime(targetWet, now, timeConstant);
+                } else {
+                    this.delayWetGain.gain.setValueAtTime(targetWet, now);
+                }
+            }
+        }
     }
 
     // --- Core Module Methods (AudioEngine Interface) ---
@@ -79,13 +190,14 @@ class AEMelodySine {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - NEW: The volume/occurrence/intensity configuration (0-100).
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -96,8 +208,16 @@ class AEMelodySine {
              }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            // Merge initial settings with specific defaults for this module
-            this.settings = { ...this.defaultMelodySettings, ...initialSettings };
+            
+            // NEW: Store the base settings separately from merged settings
+            this.baseSettings = { ...this.defaultMelodySettings, ...initialSettings };
+            
+            // Merge default settings with specific settings for this mood
+            this.settings = { ...this.baseSettings };
+            
+            // NEW: Store mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
+            
             this.currentMood = initialMood;
             this.currentPattern = this._selectMelodyPattern(this.settings);
             this.currentOctaveOffset = this._selectOctaveOffset(this.settings);
@@ -105,7 +225,7 @@ class AEMelodySine {
             // --- Create Core Nodes ---
             // 1. Master Output Gain
             this.moduleOutputGain = this.audioContext.createGain();
-            this.moduleOutputGain.gain.setValueAtTime(this.settings.melodyVolume, this.audioContext.currentTime);
+            this.moduleOutputGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime);
 
             // 2. Vibrato LFO & Gain
             this.vibratoLFO = this.audioContext.createOscillator();
@@ -113,7 +233,7 @@ class AEMelodySine {
             this.vibratoLFO.frequency.setValueAtTime(this.settings.vibratoRate, this.audioContext.currentTime);
             this.vibratoLFO.phase = Math.random() * Math.PI * 2; // Random start phase for uniqueness
             this.vibratoGain = this.audioContext.createGain();
-            this.vibratoGain.gain.setValueAtTime(this.settings.vibratoDepth, this.audioContext.currentTime);
+            this.vibratoGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start with minimal vibrato
             this.vibratoLFO.connect(this.vibratoGain);
             // Vibrato Gain connects to individual oscillator detune params later in _createNote
 
@@ -121,9 +241,9 @@ class AEMelodySine {
             this.delayNode = this.audioContext.createDelay(1.0); // Max delay 1 second
             this.delayNode.delayTime.setValueAtTime(this.settings.delayTime, this.audioContext.currentTime);
             this.feedbackGain = this.audioContext.createGain();
-            this.feedbackGain.gain.setValueAtTime(this.settings.delayFeedback, this.audioContext.currentTime);
+            this.feedbackGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start with minimal feedback
             this.delayWetGain = this.audioContext.createGain();
-            this.delayWetGain.gain.setValueAtTime(this.settings.delayWetMix, this.audioContext.currentTime);
+            this.delayWetGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start with minimal wet mix
 
             // --- Connect Audio Graph ---
             // Dry Path: Module Output -> Master Output
@@ -134,6 +254,9 @@ class AEMelodySine {
             this.feedbackGain.connect(this.delayNode); // Feedback loop
             this.delayNode.connect(this.delayWetGain);
             this.delayWetGain.connect(this.masterOutput);
+
+            // NEW: Apply configuration-based parameters
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             // Start Vibrato LFO (runs constantly, only affects playing notes)
             try { this.vibratoLFO.start(); }
@@ -304,8 +427,9 @@ class AEMelodySine {
      * @param {string} newMood - The key of the new mood.
      * @param {object} newSettings - The moodAudioSettings for the new mood.
      * @param {number} transitionTime - Duration for the transition (used for parameter ramps).
+     * @param {object} moodConfig - NEW: The volume/occurrence/intensity configuration (0-100).
      */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is missing.`);
@@ -315,7 +439,7 @@ class AEMelodySine {
            console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is closed.`);
            return;
         }
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
 
         const wasPlaying = this.isPlaying; // Store original playback state
 
@@ -325,29 +449,31 @@ class AEMelodySine {
             this.stop(this.audioContext.currentTime, 0.1); // Quick stop/release trigger
 
             // --- Update Settings ---
-            this.settings = { ...this.defaultMelodySettings, ...newSettings };
+            // NEW: Store base settings separately
+            this.baseSettings = { ...this.defaultMelodySettings, ...newSettings };
+            this.settings = { ...this.baseSettings };
+            
+            // NEW: Update mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
+            
             this.currentMood = newMood;
+
+            // NEW: Apply mood configuration with transition
+            this._applyMoodConfig(transitionTime);
 
             const now = this.audioContext.currentTime;
             const rampTime = transitionTime * 0.5; // Use part of transition for parameter ramps
 
-            // --- Update Module Parameters ---
-            // 1. Overall Volume
-            if (this.moduleOutputGain) {
-                this.moduleOutputGain.gain.setTargetAtTime(this.settings.melodyVolume, now, rampTime / 2);
-            }
-
-            // 2. Vibrato
-            if (this.vibratoLFO && this.vibratoGain) {
-                this.vibratoLFO.frequency.setTargetAtTime(this.settings.vibratoRate, now, rampTime);
-                this.vibratoGain.gain.setTargetAtTime(this.settings.vibratoDepth, now, rampTime);
-            }
-
-            // 3. Delay Effect
-            if (this.delayNode && this.feedbackGain && this.delayWetGain) {
+            // --- Update Base Settings (not affected by mood config) ---
+            
+            // Update delay time (not part of intensity mapping)
+            if (this.delayNode) {
                 this.delayNode.delayTime.setTargetAtTime(this.settings.delayTime, now, rampTime);
-                this.feedbackGain.gain.setTargetAtTime(this.settings.delayFeedback, now, rampTime);
-                this.delayWetGain.gain.setTargetAtTime(this.settings.delayWetMix, now, rampTime);
+            }
+
+            // Update vibrato rate (not part of intensity mapping)
+            if (this.vibratoLFO) {
+                this.vibratoLFO.frequency.setTargetAtTime(this.settings.vibratoRate, now, rampTime);
             }
 
             // --- Reset Sequencer State for New Mood ---
@@ -425,6 +551,7 @@ class AEMelodySine {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null; // NEW: Clear base settings
             this.currentPattern = [];
             this.activeNotes.clear(); // Ensure map is cleared
             console.log(`${this.MODULE_ID}: Disposal complete.`);
@@ -491,14 +618,21 @@ class AEMelodySine {
         // Intended start time for calculating release, potentially humanized
         const intendedPlayTime = noteStartTime + timingOffset;
 
+        // NEW: Apply note probability based on occurrence
+        let playThisNote = true;
+        if (!isRest && this.settings.noteProbability < 1.0) {
+            // Roll dice to see if we play this note (based on occurrence config)
+            playThisNote = Math.random() < this.settings.noteProbability;
+        }
 
-        if (!isRest) {
+        if (!isRest && playThisNote) {
             // Play the note using precise Web Audio scheduling
             // Pass the *intended* play time for release calculation, but the function
             // will use lookahead for actual audio event scheduling.
             this._createNote(patternItem, intendedPlayTime, noteDurationSeconds);
         } else {
-             // console.debug(`${this.MODULE_ID}: Rest for ${noteDurationSeconds.toFixed(2)}s starting at ${noteStartTime.toFixed(3)}`);
+             // If it's a rest or probability check failed, treat as silent
+             // console.debug(`${this.MODULE_ID}: Rest or skipped note for ${noteDurationSeconds.toFixed(2)}s starting at ${noteStartTime.toFixed(3)}`);
         }
 
         // Calculate the start time for the *following* note/rest based on the *un-humanized* grid time
