@@ -1,7 +1,7 @@
 // ae_instrumentPianoChord.js - Audio Module for Soft, Sustained Piano Chords
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.1 (Fixed timing issues with lookahead scheduling)
+// Version: 1.0.2 (Added volume/occurrence/intensity configuration system)
 
 /**
  * @class AEInstrumentPianoChord
@@ -15,9 +15,13 @@ class AEInstrumentPianoChord {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = {}; // Store original settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // Default mood configuration (0-100 scale)
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 };
 
         // --- Core Audio Nodes (Module Level) ---
         this.moduleOutputGain = null; // Master gain for this module (volume and overall fades)
@@ -80,6 +84,16 @@ class AEInstrumentPianoChord {
             // Module Envelope
             attackTimeModule: 1.0,      // Module fade-in time (s)
             releaseTimeModule: 2.5,     // Module fade-out time (s)
+            
+            // --- Additional settings for intensity mapping ranges ---
+            filterQMin: 0.8,            // Min Q for intensity=0
+            filterQMax: 4.0,            // Max Q for intensity=100
+            delayWetMixMin: 0.15,       // Min wet mix for intensity=0
+            delayWetMixMax: 0.6,        // Max wet mix for intensity=100
+            delayFeedbackMin: 0.1,      // Min feedback for intensity=0
+            delayFeedbackMax: 0.5,      // Max feedback for intensity=100
+            detuneAmountMin: 1,         // Min detune for intensity=0
+            detuneAmountMax: 6,         // Max detune for intensity=100
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
@@ -90,20 +104,25 @@ class AEInstrumentPianoChord {
     /**
      * Initialize audio nodes based on initial mood settings.
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) throw new Error("AudioContext or masterOutputNode is missing.");
             if (audioContext.state === 'closed') throw new Error("AudioContext is closed.");
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            this.settings = { ...this.defaultChordSettings, ...initialSettings };
+            
+            // Store original base settings and mood config
+            this.baseSettings = { ...this.defaultChordSettings, ...initialSettings };
+            this.settings = { ...this.baseSettings }; // Working copy
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
             this.currentMood = initialMood;
+            
             this.currentChordPattern = this.settings.chordRhythmPattern || this.defaultChordSettings.chordRhythmPattern;
             this._updateBeatDuration(); // Calculate initial beat duration
 
@@ -119,6 +138,9 @@ class AEInstrumentPianoChord {
             this.feedbackGain = this.audioContext.createGain();
             this.delayWetGain = this.audioContext.createGain();
             this._updateDelayParameters(this.settings); // Set initial delay params
+
+            // --- Apply Initial Mood Config ---
+            this._applyMoodConfig(0); // Apply immediately (no transition time)
 
             // --- Connect Audio Graph ---
             // Chord outputs connect to moduleFilter
@@ -253,24 +275,29 @@ class AEInstrumentPianoChord {
     }
 
     /** Adapt chord generation to the new mood's settings. */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) { console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext missing.`); return; }
         if (this.audioContext.state === 'closed') { console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext closed.`); return; }
 
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
         const wasPlaying = this.isPlaying;
 
         try {
             // Stop current sequence cleanly before changing settings
             this.stop(this.audioContext.currentTime, 0.2); // Quick stop
 
-            // Update settings
-            this.settings = { ...this.defaultChordSettings, ...newSettings };
+            // Update base settings and mood config
+            this.baseSettings = { ...this.defaultChordSettings, ...newSettings };
+            this.settings = { ...this.baseSettings }; // Working copy
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
             this.currentMood = newMood;
 
             const now = this.audioContext.currentTime;
             const rampTime = transitionTime * 0.6;
+
+            // Apply Mood Config with transition time
+            this._applyMoodConfig(transitionTime);
 
             // Update Module Parameters
             if (this.moduleOutputGain) { // Volume ramps up during play() if restarting
@@ -337,9 +364,153 @@ class AEInstrumentPianoChord {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             this.currentChordPattern = [];
             this.activeChords.clear();
             console.log(`${this.MODULE_ID}: Disposal complete.`);
+        }
+    }
+
+    // --- Mood Config Methods (New) ---
+    
+    /**
+     * Maps a value from 0-100 scale to a target range
+     * @param {number} value0to100 - Input value (0-100)
+     * @param {number} minTarget - Minimum target value
+     * @param {number} maxTarget - Maximum target value
+     * @returns {number} - Mapped value
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+    
+    /**
+     * Applies the mood configuration (volume/occurrence/intensity) to module parameters
+     * @param {number} transitionTime - Time in seconds for parameter transitions
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.isEnabled) return;
+        
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.6 : 0;
+        const timeConstant = rampTime / 3.0;
+        
+        // --- Apply Volume ---
+        if (this.moduleOutputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings.chordVolume || this.defaultChordSettings.chordVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            // Store the calculated volume for use in play()
+            this.settings.chordVolume = targetVolume;
+            
+            // Only apply immediately if already playing, otherwise play() will handle it
+            if (this.isPlaying) {
+                if (rampTime > 0.01) {
+                    this.moduleOutputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+                } else {
+                    this.moduleOutputGain.gain.setValueAtTime(targetVolume, now);
+                }
+            }
+        }
+        
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100`);
+            
+            // For piano chords, occurrence affects the rhythm pattern - adding more rests at lower occurrence
+            // We'll modify the current chord pattern based on occurrence
+            const basePattern = this.baseSettings.chordRhythmPattern || this.defaultChordSettings.chordRhythmPattern;
+            
+            if (this.moodConfig.occurrence >= 90) {
+                // At high occurrence, use the original pattern
+                this.currentChordPattern = [...basePattern];
+                this.settings.chordRhythmPattern = [...basePattern];
+            } else if (this.moodConfig.occurrence >= 60) {
+                // At medium occurrence, add some additional rests
+                const modifiedPattern = [];
+                basePattern.forEach(item => {
+                    modifiedPattern.push({...item}); // Add original item
+                    // If this was a played chord, add a short rest after it ~30% of the time
+                    if (item.play === true && Math.random() < 0.3) {
+                        modifiedPattern.push({play: false, duration: 1});
+                    }
+                });
+                this.currentChordPattern = modifiedPattern;
+                this.settings.chordRhythmPattern = modifiedPattern;
+            } else {
+                // At low occurrence, make the pattern sparser with longer rests
+                const modifiedPattern = [];
+                basePattern.forEach(item => {
+                    if (item.play === true) {
+                        // 50% chance to play or rest based on occurrence
+                        const shouldPlay = Math.random() < (this.moodConfig.occurrence / 100);
+                        modifiedPattern.push({
+                            play: shouldPlay,
+                            duration: item.duration
+                        });
+                        
+                        // Add an additional rest ~40% of the time
+                        if (Math.random() < 0.4) {
+                            modifiedPattern.push({
+                                play: false,
+                                duration: Math.ceil(Math.random() * 3)
+                            });
+                        }
+                    } else {
+                        // Keep existing rests, potentially extend them
+                        modifiedPattern.push({
+                            play: false,
+                            duration: item.duration * (Math.random() < 0.3 ? 2 : 1)
+                        });
+                    }
+                });
+                this.currentChordPattern = modifiedPattern;
+                this.settings.chordRhythmPattern = modifiedPattern;
+            }
+            
+            // Reset pattern position on significant occurrence changes
+            this.currentPatternIndex = 0;
+        }
+        
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Filter Q (Resonance)
+            const filterQMin = this.baseSettings.filterQMin || this.defaultChordSettings.filterQMin;
+            const filterQMax = this.baseSettings.filterQMax || this.defaultChordSettings.filterQMax;
+            const targetQ = this._mapValue(this.moodConfig.intensity, filterQMin, filterQMax);
+            this.settings.filterQBase = targetQ;
+            console.log(`  -> Filter Q Base: ${targetQ.toFixed(2)}`);
+            
+            // 2. Delay Wet Mix
+            const delayWetMixMin = this.baseSettings.delayWetMixMin || this.defaultChordSettings.delayWetMixMin;
+            const delayWetMixMax = this.baseSettings.delayWetMixMax || this.defaultChordSettings.delayWetMixMax;
+            const targetWetMix = this._mapValue(this.moodConfig.intensity, delayWetMixMin, delayWetMixMax);
+            this.settings.delayWetMix = targetWetMix;
+            console.log(`  -> Delay Wet Mix: ${targetWetMix.toFixed(2)}`);
+            
+            // 3. Delay Feedback
+            const delayFeedbackMin = this.baseSettings.delayFeedbackMin || this.defaultChordSettings.delayFeedbackMin;
+            const delayFeedbackMax = this.baseSettings.delayFeedbackMax || this.defaultChordSettings.delayFeedbackMax;
+            const targetFeedback = this._mapValue(this.moodConfig.intensity, delayFeedbackMin, delayFeedbackMax);
+            this.settings.delayFeedback = targetFeedback;
+            console.log(`  -> Delay Feedback: ${targetFeedback.toFixed(2)}`);
+            
+            // 4. Detune Amount
+            const detuneAmountMin = this.baseSettings.detuneAmountMin || this.defaultChordSettings.detuneAmountMin;
+            const detuneAmountMax = this.baseSettings.detuneAmountMax || this.defaultChordSettings.detuneAmountMax;
+            const targetDetune = this._mapValue(this.moodConfig.intensity, detuneAmountMin, detuneAmountMax);
+            this.settings.detuneAmount = targetDetune;
+            console.log(`  -> Detune Amount: ${targetDetune.toFixed(2)}`);
+            
+            // Apply delay parameters immediately
+            if (this.delayNode && this.delayWetGain && this.feedbackGain) {
+                this._updateDelayParameters(this.settings, rampTime);
+            }
         }
     }
 

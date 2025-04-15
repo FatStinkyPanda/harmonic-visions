@@ -1,246 +1,177 @@
-// EmotionAudioList.js
-// Defines which audio modules (ae_*.js files) are active for each mood.
-// Used by AudioEngine to configure the soundscape.
-// Part of the Harmonic Visions project by FatStinkyPanda
+// EmotionAudioList.js - Updated Structure
+// Defines which audio modules are active and their high-level configuration per mood.
+// - volume: Master gain (0-100). 100 = volume defined in module defaults/data.js.
+// - occurrence: How often/dense (0-100). 100 = max rate/density defined by module.
+// - intensity: Strength of effects (LFO depth, Q, wet mix, etc.) (0-100). 100 = max effect defined by module.
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
 
-/**
- * @description Maps mood keys to arrays of audio module identifiers.
- * The identifiers should correspond to the base filenames (without .js)
- * of the audio module scripts (e.g., 'ae_padWarmAnalog').
- * The AudioEngine uses this configuration to load and manage active sounds.
- */
 const EmotionAudioModules = {
-
-    // --- Core Moods ---
-
     calm: [
         // Pads & Drones (Gentle, Sustained)
-        'ae_pads', // Core pad generator
-        'ae_padSoftString',
-        'ae_padWarmAnalog',
-        'ae_bassSubSine', // Deep, simple foundation
 
-        // Melody (Sparse, Soft)
-        'ae_melodySine', // Pure tone, sparse notes
-        'ae_melodyFluteSynth', // Gentle, breathy
+
+        { module: 'ae_pads', volume: 65, occurrence: 60, intensity: 40 },
+
+        { module: 'ae_padSoftString', volume: 90, occurrence: 60, intensity: 50 },
+
+        { module: 'ae_padWarmAnalog', volume: 80, occurrence: 40, intensity: 60 },
+
+        { module: 'ae_bassSubSine', volume: 40, occurrence: 35, intensity: 20 },
+
+        // // Melody (Sparse, Soft)
+
+
+        { module: 'ae_melodySine', volume: 10, occurrence: 25, intensity: 5 }, // Low occurrence
+
+        { module: 'ae_melodyFluteSynth', volume: 80, occurrence: 35, intensity: 75 },
 
         // Ambient (Natural, Peaceful)
-        'ae_ambientStreamGentle',
-        'ae_ambientWavesCalm', // Rhythmic lapping
-        'ae_ambientWindLight',
-        'ae_ambientInsectsNight', // If appropriate for visuals
-        'ae_ambientWaterDrips', // Occasional, echoing
+
+
+        { module: 'ae_ambientStreamGentle', volume: 10, occurrence: 100, intensity: 15 },
+
+        { module: 'ae_ambientWavesCalm', volume: 100, occurrence: 100, intensity: 35 },
+
+        { module: 'ae_ambientWindLight', volume: 20, occurrence: 15, intensity: 40 },
+        { module: 'ae_ambientInsectsNight', volume: 8, occurrence: 15, intensity: 5 },
+
+        // { module: 'ae_ambientWaterDrips', volume: 4, occurrence: 15, intensity: 80 }, // Low occurrence, high intensity (echo)
 
         // Percussion (Minimal, Subtle)
-        'ae_percKickSoft', // Barely audible pulse
-        // 'ae_percShaker', // Maybe too active?
+
+
+        { module: 'ae_percKickSoft', volume: 15, occurrence: 10, intensity: 5 }, // Very sparse
 
         // Instruments/Effects (Subtle)
-        'ae_instrumentPianoChord', // Very soft, sustained chords
-        'ae_effectHeartbeat', // Slow, rhythmic pulse
+
+
+        // { module: 'ae_instrumentPianoChord', volume: 1, occurrence: 1, intensity: 1 }, // Very sparse, sustained
+
+        // { module: 'ae_effectHeartbeat', volume: 80, occurrence: 100, intensity: 100 },
     ],
 
     soft: [
-        // Pads & Drones (Warm, Smooth)
-        'ae_pads',
-        'ae_padWarmAnalog',
-        'ae_padSoftString',
-        'ae_bassWarmTriangle', // Rounded bass
-
-        // Melody (Gentle, Flowing)
-        'ae_melodyFluteSynth',
-        'ae_melodyPluck', // Kalimba/Harp-like
-        'ae_melodySine',
-
-        // Ambient (Comforting, Natural)
-        'ae_ambientBirdsong', // Gentle chorus
-        'ae_ambientWindLight',
-        'ae_ambientFireCrackle', // Soft, intermittent
-        'ae_ambientStreamGentle',
-
-        // Percussion (Soft, Rhythmic)
-        'ae_percShaker', // Gentle rhythm
-        'ae_percSnareBrush', // Soft hits
-        'ae_percKickSoft',
-        'ae_percTomLow', // Very occasional deep tone
-
-        // Instruments/Effects (Warm)
-        'ae_instrumentPianoChord', // Slightly richer chords
-        'ae_instrumentViolinSwell', // Gentle swells
+        { module: 'ae_pads', volume: 70, occurrence: 100, intensity: 50 },
+        { module: 'ae_padWarmAnalog', volume: 60, occurrence: 100, intensity: 60 },
+        { module: 'ae_padSoftString', volume: 50, occurrence: 100, intensity: 55 },
+        { module: 'ae_bassWarmTriangle', volume: 65, occurrence: 100, intensity: 40 },
+        { module: 'ae_melodyFluteSynth', volume: 55, occurrence: 50, intensity: 50 },
+        { module: 'ae_melodyPluck', volume: 50, occurrence: 40, intensity: 60 },
+        { module: 'ae_ambientBirdsong', volume: 45, occurrence: 70, intensity: 50 },
+        { module: 'ae_ambientWindLight', volume: 40, occurrence: 100, intensity: 45 },
+        { module: 'ae_ambientFireCrackle', volume: 30, occurrence: 40, intensity: 60 },
+        { module: 'ae_percShaker', volume: 35, occurrence: 50, intensity: 40 },
+        { module: 'ae_percSnareBrush', volume: 40, occurrence: 30, intensity: 45 },
+        { module: 'ae_percKickSoft', volume: 60, occurrence: 40, intensity: 40 },
+        { module: 'ae_instrumentPianoChord', volume: 45, occurrence: 30, intensity: 65 },
+        { module: 'ae_instrumentViolinSwell', volume: 35, occurrence: 25, intensity: 70 },
     ],
 
-    uplifting: [
-        // Pads & Drones (Bright, Shimmering)
-        'ae_pads',
-        'ae_padBrightShimmer',
-        'ae_padGlassyFM', // Clear, bell-like
-
-        // Melody (Active, Bright, Rhythmic)
-        'ae_melodyArp', // Arpeggiated patterns
-        'ae_melodyCrystal', // Bright lead
-        'ae_melodyBell', // Clear tones
-
-        // Bass (Moving, Defined)
-        'ae_bassResonantFilter', // Filter sweeps add energy
-        'ae_bassWarmTriangle', // Solid foundation
-
-        // Ambient (Energetic, Positive)
-        'ae_ambientBirdsong', // More active birds
-        'ae_ambientStreamGentle', // Flowing water adds energy
-
-        // Percussion (Clear, Driving - but not overwhelming)
-        'ae_percKickDeep', // Defined kick
-        'ae_percHiHatClosed', // Rhythmic ticks
-        'ae_percSnareBrush', // Adds texture
-        'ae_percRimshot', // Sharp accents
-        'ae_percShaker',
-
-        // Instruments/Effects (Accents)
-        'ae_percCymbalSwell', // For transitions/emphasis
-        'ae_cosmicStarlight', // Add sparkle
+     uplifting: [
+        { module: 'ae_pads', volume: 60, occurrence: 100, intensity: 65 },
+        { module: 'ae_padBrightShimmer', volume: 70, occurrence: 100, intensity: 75 },
+        { module: 'ae_padGlassyFM', volume: 55, occurrence: 100, intensity: 70 },
+        { module: 'ae_melodyArp', volume: 65, occurrence: 85, intensity: 70 },
+        { module: 'ae_melodyCrystal', volume: 60, occurrence: 60, intensity: 80 },
+        { module: 'ae_melodyBell', volume: 50, occurrence: 50, intensity: 65 },
+        { module: 'ae_bassResonantFilter', volume: 70, occurrence: 75, intensity: 70 },
+        { module: 'ae_ambientBirdsong', volume: 50, occurrence: 80, intensity: 60 },
+        { module: 'ae_ambientStreamGentle', volume: 40, occurrence: 100, intensity: 70 },
+        { module: 'ae_percKickDeep', volume: 75, occurrence: 80, intensity: 60 },
+        { module: 'ae_percHiHatClosed', volume: 55, occurrence: 90, intensity: 50 },
+        { module: 'ae_percSnareBrush', volume: 50, occurrence: 65, intensity: 55 },
+        { module: 'ae_percRimshot', volume: 45, occurrence: 40, intensity: 65 },
+        { module: 'ae_percShaker', volume: 40, occurrence: 70, intensity: 50 },
+        { module: 'ae_percCymbalSwell', volume: 40, occurrence: 15, intensity: 75 },
+        { module: 'ae_cosmicStarlight', volume: 45, occurrence: 60, intensity: 80 },
     ],
 
     warm: [
-        // Pads & Drones (Rich, Analog, Cozy)
-        'ae_pads',
-        'ae_padWarmAnalog',
-        'ae_padFilteredNoise', // Subtle texture layer
-
-        // Melody (Comforting, Plucked)
-        'ae_melodyPluck',
-        'ae_melodySine', // Lower register, warm tone
-
-        // Bass (Grounded, Smooth)
-        'ae_bassWarmTriangle',
-        'ae_bassSubSine',
-
-        // Ambient (Cozy, Enveloping)
-        'ae_ambientFireplace', // Steady warmth
-        'ae_ambientFireCrackle',
-        'ae_ambientWindLight', // Gentle breeze outside
-        'ae_ambientRainLight', // Optional: Cozy rain
-
-        // Percussion (Deep, Grounded)
-        'ae_percKickSoft',
-        'ae_percTomLow', // Deep resonance
-        'ae_percShaker', // Gentle texture
-
-        // Instruments/Effects (Intimate)
-        'ae_effectHeartbeat', // Comforting rhythm
-        'ae_instrumentPianoChord', // Rich, warm chords
-        'ae_instrumentViolinSwell',
+        { module: 'ae_pads', volume: 75, occurrence: 100, intensity: 55 },
+        { module: 'ae_padWarmAnalog', volume: 70, occurrence: 100, intensity: 65 },
+        { module: 'ae_padFilteredNoise', volume: 40, occurrence: 100, intensity: 40 }, // Subtle texture
+        { module: 'ae_melodyPluck', volume: 55, occurrence: 45, intensity: 55 },
+        { module: 'ae_melodySine', volume: 40, occurrence: 30, intensity: 35 }, // Lower register
+        { module: 'ae_bassWarmTriangle', volume: 70, occurrence: 100, intensity: 45 },
+        { module: 'ae_bassSubSine', volume: 60, occurrence: 100, intensity: 30 },
+        { module: 'ae_ambientFireplace', volume: 50, occurrence: 100, intensity: 60 },
+        { module: 'ae_ambientFireCrackle', volume: 35, occurrence: 50, intensity: 65 },
+        { module: 'ae_ambientWindLight', volume: 30, occurrence: 100, intensity: 35 },
+        { module: 'ae_percKickSoft', volume: 65, occurrence: 50, intensity: 40 },
+        { module: 'ae_percTomLow', volume: 45, occurrence: 20, intensity: 70 },
+        { module: 'ae_percShaker', volume: 30, occurrence: 40, intensity: 45 },
+        { module: 'ae_effectHeartbeat', volume: 40, occurrence: 80, intensity: 50 },
+        { module: 'ae_instrumentPianoChord', volume: 50, occurrence: 35, intensity: 70 },
+        { module: 'ae_instrumentViolinSwell', volume: 40, occurrence: 30, intensity: 60 },
     ],
 
     cosmic: [
-        // Pads & Drones (Deep, Evolving, Ethereal)
-        'ae_pads',
-        'ae_padCosmicDeep',
-        'ae_padResonant', // Shifting resonant frequencies
-        'ae_droneMystical', // Inharmonic overtones
-        'ae_cosmicSpaceDrone', // Very low frequency vastness
-
-        // Melody (Sparse, High, Pure/Strange)
-        'ae_melodyBell', // High, echoing tones
-        'ae_melodySine', // Pure, sustained notes
-        // 'ae_melodyCrystal', // Maybe too sharp? Use sparingly if at all.
-
-        // Bass (Very Deep, Sustained)
-        'ae_bassDroneDeep',
-        'ae_bassSubSine', // Foundational low end
-
-        // Ambient (Space, Ethereal)
-        'ae_cosmicPulsar', // Rhythmic pulsing synth
-        'ae_cosmicStarlight', // High-frequency twinkles
-        'ae_ambientWindHeavy', // Distant solar wind?
-
-        // Percussion (Minimal, Deep, Ambient)
-        'ae_percTomLow', // Very sparse, deep hits
-        'ae_percCymbalSwell', // Reversed or long swells
-        // Avoid standard rhythmic percussion
-
-        // Instruments/Effects
-        // None typically needed, focus on pads/drones/ambient
+        { module: 'ae_pads', volume: 70, occurrence: 100, intensity: 70 },
+        { module: 'ae_padCosmicDeep', volume: 80, occurrence: 100, intensity: 80 },
+        { module: 'ae_padResonant', volume: 65, occurrence: 100, intensity: 75 },
+        { module: 'ae_droneMystical', volume: 60, occurrence: 100, intensity: 60 },
+        { module: 'ae_cosmicSpaceDrone', volume: 75, occurrence: 100, intensity: 85 },
+        { module: 'ae_melodyBell', volume: 45, occurrence: 20, intensity: 85 }, // Sparse, echoing
+        { module: 'ae_melodySine', volume: 50, occurrence: 15, intensity: 50 }, // Pure tones
+        { module: 'ae_bassDroneDeep', volume: 85, occurrence: 100, intensity: 75 },
+        { module: 'ae_bassSubSine', volume: 80, occurrence: 100, intensity: 40 },
+        { module: 'ae_cosmicPulsar', volume: 55, occurrence: 60, intensity: 70 },
+        { module: 'ae_cosmicStarlight', volume: 60, occurrence: 75, intensity: 80 },
+        { module: 'ae_ambientWindHeavy', volume: 40, occurrence: 100, intensity: 60 }, // Solar wind
+        { module: 'ae_percTomLow', volume: 40, occurrence: 10, intensity: 80 }, // Very sparse deep hits
+        { module: 'ae_percCymbalSwell', volume: 50, occurrence: 10, intensity: 85 }, // Long swells
     ],
 
     // --- Additional Example Moods ---
-
-    bright: [ // Similar to uplifting, maybe more synthetic/sharp
-        // Pads & Drones
-        'ae_pads',
-        'ae_padBrightShimmer',
-        'ae_padGlassyFM',
-
-        // Melody
-        'ae_melodyArp',
-        'ae_melodyCrystal',
-        'ae_melodySawFiltered', // Classic synth lead
-        'ae_melodyBell',
-
-        // Bass
-        'ae_bassResonantFilter',
-
-        // Ambient
-        'ae_cosmicStarlight', // Active sparkle
-        // Less nature sounds
-
-        // Percussion
-        'ae_percKickDeep',
-        'ae_percSnareBrush',
-        'ae_percHiHatClosed',
-        'ae_percHiHatOpen', // More sizzle
-        'ae_percRimshot',
-
-        // Instruments/Effects
-        'ae_percCymbalSwell',
+     bright: [
+        { module: 'ae_pads', volume: 65, occurrence: 100, intensity: 70 },
+        { module: 'ae_padBrightShimmer', volume: 75, occurrence: 100, intensity: 80 },
+        { module: 'ae_padGlassyFM', volume: 60, occurrence: 100, intensity: 75 },
+        { module: 'ae_melodyArp', volume: 70, occurrence: 90, intensity: 75 },
+        { module: 'ae_melodyCrystal', volume: 65, occurrence: 70, intensity: 85 },
+        { module: 'ae_melodySawFiltered', volume: 55, occurrence: 50, intensity: 70 },
+        { module: 'ae_melodyBell', volume: 50, occurrence: 60, intensity: 65 },
+        { module: 'ae_bassResonantFilter', volume: 75, occurrence: 80, intensity: 75 },
+        { module: 'ae_cosmicStarlight', volume: 50, occurrence: 70, intensity: 80 },
+        { module: 'ae_percKickDeep', volume: 80, occurrence: 85, intensity: 65 },
+        { module: 'ae_percSnareBrush', volume: 55, occurrence: 70, intensity: 60 },
+        { module: 'ae_percHiHatClosed', volume: 60, occurrence: 95, intensity: 55 },
+        { module: 'ae_percHiHatOpen', volume: 45, occurrence: 25, intensity: 70 },
+        { module: 'ae_percRimshot', volume: 50, occurrence: 45, intensity: 70 },
+        { module: 'ae_percCymbalSwell', volume: 40, occurrence: 15, intensity: 70 },
     ],
 
-    mystical: [ // Ethereal, ancient, slightly strange
-        // Pads & Drones
-        'ae_pads',
-        'ae_padResonant',
-        'ae_padFilteredNoise',
-        'ae_droneMystical',
-        'ae_padCosmicDeep', // Less intense than 'cosmic'
-
-        // Melody
-        'ae_melodyBell', // Echoing, sparse
-        'ae_melodyPluck', // Kalimba/ancient harp feel
-        'ae_melodyFluteSynth', // Breathy, ethereal
-
-        // Bass
-        'ae_bassDroneDeep', // Low, sustained foundation
-        'ae_bassSubSine',
-
-        // Ambient
-        'ae_ambientWaterDrips', // Cave/spring feel
-        'ae_ambientWindHeavy', // Distant, moaning wind
-        'ae_ambientThunderDistant', // Rare, ominous rumble
-        'ae_cosmicStarlight', // Sparse, magical twinkles
-
-        // Percussion (Sparse, Ritualistic)
-        'ae_percTomLow',
-        'ae_percTomMid', // Resonant hits
-        'ae_percShaker', // Rattles, textures
-        'ae_percCymbalSwell', // Long swells
-
-        // Instruments/Effects
-        'ae_instrumentViolinSwell', // Slow, eerie swells
+    mystical: [
+        { module: 'ae_pads', volume: 60, occurrence: 100, intensity: 60 },
+        { module: 'ae_padResonant', volume: 70, occurrence: 100, intensity: 80 },
+        { module: 'ae_padFilteredNoise', volume: 45, occurrence: 100, intensity: 50 },
+        { module: 'ae_droneMystical', volume: 75, occurrence: 100, intensity: 70 },
+        { module: 'ae_padCosmicDeep', volume: 65, occurrence: 100, intensity: 65 },
+        { module: 'ae_melodyBell', volume: 50, occurrence: 25, intensity: 75 },
+        { module: 'ae_melodyPluck', volume: 45, occurrence: 35, intensity: 65 },
+        { module: 'ae_melodyFluteSynth', volume: 40, occurrence: 30, intensity: 55 },
+        { module: 'ae_bassDroneDeep', volume: 80, occurrence: 100, intensity: 70 },
+        { module: 'ae_bassSubSine', volume: 70, occurrence: 100, intensity: 35 },
+        { module: 'ae_ambientWaterDrips', volume: 55, occurrence: 25, intensity: 80 },
+        { module: 'ae_ambientWindHeavy', volume: 45, occurrence: 100, intensity: 55 },
+        { module: 'ae_ambientThunderDistant', volume: 30, occurrence: 5, intensity: 70 },
+        { module: 'ae_cosmicStarlight', volume: 40, occurrence: 40, intensity: 70 },
+        { module: 'ae_percTomLow', volume: 50, occurrence: 15, intensity: 75 },
+        { module: 'ae_percTomMid', volume: 45, occurrence: 10, intensity: 70 },
+        { module: 'ae_percShaker', volume: 35, occurrence: 30, intensity: 55 },
+        { module: 'ae_percCymbalSwell', volume: 45, occurrence: 10, intensity: 80 },
+        { module: 'ae_instrumentViolinSwell', volume: 30, occurrence: 15, intensity: 75 },
     ],
 
     // --- Default Fallback ---
-    // A minimal, safe set if the requested mood doesn't exist
     default: [
-        'ae_pads',
-        'ae_padWarmAnalog',
-        'ae_melodySine',
-        'ae_bassSubSine',
-        'ae_ambientStreamGentle',
+        { module: 'ae_pads', volume: 60, occurrence: 100, intensity: 50 },
+        { module: 'ae_padWarmAnalog', volume: 50, occurrence: 100, intensity: 60 },
+        { module: 'ae_melodySine', volume: 40, occurrence: 40, intensity: 40 },
+        { module: 'ae_bassSubSine', volume: 70, occurrence: 100, intensity: 30 },
+        { module: 'ae_ambientStreamGentle', volume: 50, occurrence: 100, intensity: 60 },
     ]
 };
 
-// Make globally accessible (if not using modules/bundler)
-// This allows AudioEngine.js to access this configuration directly.
 window.EmotionAudioModules = EmotionAudioModules;
-
-console.log("EmotionAudioList.js loaded and defined EmotionAudioModules.");
+console.log("EmotionAudioList.js loaded and defined EmotionAudioModules (Updated Structure).");

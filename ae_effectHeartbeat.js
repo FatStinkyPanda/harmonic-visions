@@ -1,7 +1,7 @@
 // ae_effectHeartbeat.js - Audio Module for Rhythmic Heartbeat Pulse
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
+// Version: 1.0.3 (Added Vol/Occur/Inten mood config system)
 
 /**
  * @class AEEffectHeartbeat
@@ -16,9 +16,13 @@ class AEEffectHeartbeat {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store original settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // --- Mood Configuration System ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes (Module Level) ---
         this.moduleOutputGain = null; // Master gain for this module (volume and overall fades)
@@ -68,9 +72,126 @@ class AEEffectHeartbeat {
             releaseTimeModule: 2.0,     // Module fade-out time (s)
             // Required by _updateBeatDuration if not passed via settings
             tempo: 80,                  // Default fallback tempo
+            
+            // --- Base/Max values for mood config mapping ---
+            heartbeatRateFactorMin: 0.5, // Min rate factor (for occurrence=0)
+            heartbeatRateFactorMax: 2.0, // Max rate factor (for occurrence=100)
+            lubVelocityBase: 0.6,       // Base velocity for lub (for intensity=0)
+            lubVelocityMax: 1.2,        // Max velocity for lub (for intensity=100)
+            dubVelocityBase: 0.7,       // Base velocity for dub (for intensity=0)
+            dubVelocityMax: 1.3,        // Max velocity for dub (for intensity=100)
+            pitchVariationBase: 2,      // Base pitch variation (for intensity=0)
+            pitchVariationMax: 15,      // Max pitch variation (for intensity=100)
+            velocityVariationBase: 0.05, // Base velocity variation (for intensity=0)
+            velocityVariationMax: 0.3,   // Max velocity variation (for intensity=100)
+            filterQBase: 0.8,           // Base filter Q (for intensity=0)
+            filterQMax: 2.5,            // Max filter Q (for intensity=100)
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
+    }
+
+    /**
+     * Maps a value from 0-100 scale to a target range
+     * @param {number} value0to100 - Input value (0-100)
+     * @param {number} minTarget - Minimum output value
+     * @param {number} maxTarget - Maximum output value
+     * @returns {number} - Mapped value in target range
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the 0-100 mood configuration to module parameters
+     * @param {number} transitionTime - Transition time in seconds
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext) return;
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0;
+        const timeConstant = rampTime / 3.0;
+
+        // --- Apply Volume (heartbeatVolume) ---
+        if (this.moduleOutputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings.heartbeatVolume || this.defaultHeartbeatSettings.heartbeatVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (this.isPlaying) {
+                if (rampTime > 0.01) {
+                    // If already playing, ramp to new volume
+                    this.moduleOutputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+                } else {
+                    // If no transition needed, set immediately
+                    this.moduleOutputGain.gain.setValueAtTime(targetVolume, now);
+                }
+            } else {
+                // If not playing, just store for next play() call
+                this.settings.heartbeatVolume = targetVolume;
+            }
+        }
+
+        // --- Apply Occurrence (heartbeatRateFactor) ---
+        if (this.moodConfig.occurrence !== undefined) {
+            const rateFactorMin = this.baseSettings.heartbeatRateFactorMin || this.defaultHeartbeatSettings.heartbeatRateFactorMin;
+            const rateFactorMax = this.baseSettings.heartbeatRateFactorMax || this.defaultHeartbeatSettings.heartbeatRateFactorMax;
+            const targetRateFactor = this._mapValue(this.moodConfig.occurrence, rateFactorMin, rateFactorMax);
+            
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> heartbeatRateFactor ${targetRateFactor.toFixed(2)}`);
+            
+            // Update the settings
+            this.settings.heartbeatRateFactor = targetRateFactor;
+            
+            // Recalculate beat duration based on new rate factor
+            this._updateBeatDuration();
+            
+            // No need to schedule immediate change, the next beat will use the new duration
+        }
+
+        // --- Apply Intensity (multiple parameters) ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. LUB/DUB Velocity (how strong the beats are)
+            const lubVelocityBase = this.baseSettings.lubVelocityBase || this.defaultHeartbeatSettings.lubVelocityBase;
+            const lubVelocityMax = this.baseSettings.lubVelocityMax || this.defaultHeartbeatSettings.lubVelocityMax;
+            this.settings.lubVelocity = this._mapValue(this.moodConfig.intensity, lubVelocityBase, lubVelocityMax);
+            
+            const dubVelocityBase = this.baseSettings.dubVelocityBase || this.defaultHeartbeatSettings.dubVelocityBase;
+            const dubVelocityMax = this.baseSettings.dubVelocityMax || this.defaultHeartbeatSettings.dubVelocityMax;
+            this.settings.dubVelocity = this._mapValue(this.moodConfig.intensity, dubVelocityBase, dubVelocityMax);
+            
+            console.log(`  -> Velocities: lub=${this.settings.lubVelocity.toFixed(2)}, dub=${this.settings.dubVelocity.toFixed(2)}`);
+            
+            // 2. Variations (randomness increases with intensity)
+            const pitchVarBase = this.baseSettings.pitchVariationBase || this.defaultHeartbeatSettings.pitchVariationBase;
+            const pitchVarMax = this.baseSettings.pitchVariationMax || this.defaultHeartbeatSettings.pitchVariationMax;
+            this.settings.pitchVariation = this._mapValue(this.moodConfig.intensity, pitchVarBase, pitchVarMax);
+            
+            const velocityVarBase = this.baseSettings.velocityVariationBase || this.defaultHeartbeatSettings.velocityVariationBase;
+            const velocityVarMax = this.baseSettings.velocityVariationMax || this.defaultHeartbeatSettings.velocityVariationMax;
+            this.settings.velocityVariation = this._mapValue(this.moodConfig.intensity, velocityVarBase, velocityVarMax);
+            
+            console.log(`  -> Variations: pitch=${this.settings.pitchVariation.toFixed(2)}Hz, velocity=${this.settings.velocityVariation.toFixed(2)}`);
+            
+            // 3. Filter Resonance (Q)
+            if (this.filterNode && this.settings.useFilter) {
+                const baseQ = this.baseSettings.filterQBase || this.defaultHeartbeatSettings.filterQBase;
+                const maxQ = this.baseSettings.filterQMax || this.defaultHeartbeatSettings.filterQMax;
+                const targetQ = this._mapValue(this.moodConfig.intensity, baseQ, maxQ);
+                
+                console.log(`  -> Filter Q: ${targetQ.toFixed(2)}`);
+                
+                if (rampTime > 0.01) {
+                    this.filterNode.Q.setTargetAtTime(targetQ, now, timeConstant);
+                } else {
+                    this.filterNode.Q.setValueAtTime(targetQ, now);
+                }
+            }
+        }
     }
 
     // --- Core Module Methods (AudioEngine Interface) ---
@@ -81,13 +202,14 @@ class AEEffectHeartbeat {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - Optional mood configuration (volume, occurrence, intensity).
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -98,8 +220,14 @@ class AEEffectHeartbeat {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
+            
+            // Store the base settings from data.js AND defaults for fallback
+            this.baseSettings = { ...this.defaultHeartbeatSettings, ...initialSettings };
             // Merge initial settings with specific defaults for this module
             this.settings = { ...this.defaultHeartbeatSettings, ...initialSettings };
+            // Store the specific 0-100 configuration for this mood
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
+            
             this.currentMood = initialMood;
             this._updateBeatDuration(); // Calculate initial beat duration
 
@@ -126,6 +254,9 @@ class AEEffectHeartbeat {
 
             // Final connection to Master Output
             this.moduleOutputGain.connect(this.masterOutput);
+            
+            // Apply initial mood configuration (after nodes are created)
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             this.isEnabled = true;
             console.log(`${this.MODULE_ID}: Initialization complete.`);
@@ -240,8 +371,14 @@ class AEEffectHeartbeat {
         }
     }
 
-    /** Adapt heartbeat parameters to the new mood's settings. */
-    changeMood(newMood, newSettings, transitionTime) {
+    /** 
+     * Adapt heartbeat parameters to the new mood's settings. 
+     * @param {string} newMood - Name of the new mood
+     * @param {object} newSettings - Settings for the new mood from data.js
+     * @param {number} transitionTime - Time to transition in seconds
+     * @param {object} moodConfig - Optional mood configuration (volume, occurrence, intensity)
+     */
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext missing.`);
@@ -252,35 +389,28 @@ class AEEffectHeartbeat {
             return;
         }
 
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s. Config:`, moodConfig);
         try {
+            // Store the new base settings from data.js
+            this.baseSettings = { ...this.defaultHeartbeatSettings, ...newSettings };
             // Merge new settings with defaults
             this.settings = { ...this.defaultHeartbeatSettings, ...newSettings };
+            // Update mood configuration
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
+            
             this.currentMood = newMood;
 
             const now = this.audioContext.currentTime;
             const rampTime = transitionTime * 0.6; // Use part of transition for smooth ramps
 
-            // --- Update Module Parameters ---
-            // 1. Overall Volume
-            if (this.moduleOutputGain) {
-                const targetVolume = this.isPlaying ? this.settings.heartbeatVolume : 0.0001;
-                const gainParam = this.moduleOutputGain.gain;
-                 if (typeof gainParam.cancelAndHoldAtTime === 'function') gainParam.cancelAndHoldAtTime(now);
-                 else gainParam.cancelScheduledValues(now);
-                gainParam.setTargetAtTime(targetVolume, now, rampTime / 2); // Faster volume ramp
-            }
+            // --- Apply New Mood Config with Transition ---
+            this._applyMoodConfig(transitionTime);
 
-            // 2. Filter Parameters (if filter exists)
-            if (this.filterNode) {
+            // --- Update Filter Parameters (if filter exists) ---
+            if (this.filterNode && this.settings.useFilter) {
                 this.filterNode.frequency.setTargetAtTime(this.settings.filterCutoff, now, rampTime);
-                this.filterNode.Q.setTargetAtTime(this.settings.filterQ, now, rampTime);
+                // Note: Q is already handled by _applyMoodConfig
             }
-
-            // 3. Update Sequencing Parameters
-            this._updateBeatDuration(); // Recalculate beat duration based on new tempo/rateFactor
-            // Heartbeat sound parameters (freq, decay etc.) are updated in settings
-            // and will affect the *next* beat generated.
 
             console.log(`${this.MODULE_ID}: Heartbeat parameters updated for mood '${newMood}'.`);
 
@@ -324,6 +454,7 @@ class AEEffectHeartbeat {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             this.activeBeats.clear(); // Ensure map is cleared
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }

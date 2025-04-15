@@ -1,7 +1,7 @@
 // ae_melodyFluteSynth.js - Audio Module for Gentle Flute-like Synth Melodies
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.1.2 (Fixed timing issues with lookahead scheduling)
+// Version: 1.1.3 (Adds mood configuration support for volume, occurrence, intensity)
 
 /**
  * @class AEMelodyFluteSynth
@@ -15,9 +15,13 @@ class AEMelodyFluteSynth {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store base settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // --- Mood Configuration ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes ---
         this.moduleOutputGain = null; // Master gain for this module
@@ -35,6 +39,7 @@ class AEMelodyFluteSynth {
         this.currentPatternIndex = 0;
         this.currentOctaveOffset = 0;
         this.nextNoteStartTime = 0;    // AudioContext time for the next note's attack
+        this.currentPlayProbability = 1.0; // Probability of playing a note (affected by occurrence)
 
         // --- Active Note Tracking ---
         // Map<noteId, { toneOsc, noiseSource, breathFilter, toneGain, breathGain, cleanupTimeoutId, isStopping }>
@@ -66,9 +71,19 @@ class AEMelodyFluteSynth {
             breathReleaseTime: 0.5,
             vibratoRate: 5.5,           // Hz
             vibratoDepth: 3.0,          // Cents (subtle but present)
+            vibratoDepthBase: 1.0,      // Minimum vibrato depth for intensity=0
+            vibratoDepthMax: 8.0,       // Maximum vibrato depth for intensity=100
             delayTime: 0.4,
             delayFeedback: 0.25,
+            delayFeedbackBase: 0.15,    // Minimum feedback for intensity=0
+            delayFeedbackMax: 0.45,     // Maximum feedback for intensity=100
             delayWetMix: 0.3,
+            delayWetMixBase: 0.1,       // Minimum wet mix for intensity=0 
+            delayWetMixMax: 0.6,        // Maximum wet mix for intensity=100
+            breathNoiseVolumeBase: 0.05, // Minimum breath volume for intensity=0
+            breathNoiseVolumeMax: 0.3,   // Maximum breath volume for intensity=100
+            moduleFilterQBase: 0.5,      // Minimum filter Q for intensity=0
+            moduleFilterQMax: 2.0,       // Maximum filter Q for intensity=100
             tempo: 80,
             scale: 'pentatonic',
             baseFreq: 523.25,           // C5 - Flute range often higher
@@ -90,24 +105,140 @@ class AEMelodyFluteSynth {
     // --- Core Module Methods (AudioEngine Interface) ---
 
     /**
+     * Maps a 0-100 value to a target range.
+     * @param {number} value0to100 - Input value (0-100)
+     * @param {number} minTarget - Target range minimum 
+     * @param {number} maxTarget - Target range maximum
+     * @returns {number} Mapped value
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    /**
+     * Applies the mood configuration (volume, occurrence, intensity) to module parameters.
+     * @param {number} transitionTime - Time in seconds for parameter transitions
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.isEnabled) return;
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0; // Shorter ramp for config changes
+        const timeConstant = rampTime / 3.0;
+
+        // --- Apply Volume ---
+        if (this.moduleOutputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings.melodyVolume || this.defaultFluteSettings.melodyVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            if (rampTime > 0.01) {
+                this.moduleOutputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+            } else {
+                this.moduleOutputGain.gain.setValueAtTime(targetVolume, now);
+            }
+        }
+
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            // For the flute synth, occurrence affects the probability of notes actually playing
+            // This creates a more sparse/dense melody based on the occurrence setting
+            this.currentPlayProbability = this._mapValue(this.moodConfig.occurrence, 0.3, 1.0);
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> playProbability ${this.currentPlayProbability.toFixed(2)}`);
+            // The actual application happens in _playNextNoteInSequence
+        }
+
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Vibrato Depth (affects expressiveness)
+            if (this.vibratoGain) {
+                const baseDepth = this.baseSettings.vibratoDepthBase || this.defaultFluteSettings.vibratoDepthBase;
+                const maxDepth = this.baseSettings.vibratoDepthMax || this.defaultFluteSettings.vibratoDepthMax;
+                const targetDepth = this._mapValue(this.moodConfig.intensity, baseDepth, maxDepth);
+                console.log(`  -> Vibrato Depth: ${targetDepth.toFixed(2)} cents`);
+                if (rampTime > 0.01) {
+                    this.vibratoGain.gain.setTargetAtTime(targetDepth, now, timeConstant);
+                } else {
+                    this.vibratoGain.gain.setValueAtTime(targetDepth, now);
+                }
+            }
+            
+            // 2. Breath Noise Volume (affects breathy quality)
+            const baseBreathVol = this.baseSettings.breathNoiseVolumeBase || this.defaultFluteSettings.breathNoiseVolumeBase;
+            const maxBreathVol = this.baseSettings.breathNoiseVolumeMax || this.defaultFluteSettings.breathNoiseVolumeMax;
+            this.settings.breathNoiseVolume = this._mapValue(this.moodConfig.intensity, baseBreathVol, maxBreathVol);
+            console.log(`  -> Breath Noise Volume: ${this.settings.breathNoiseVolume.toFixed(2)}`);
+            // Applied to new notes as they're created
+            
+            // 3. Filter Q (affects resonance/brightness)
+            if (this.moduleFilter) {
+                const baseQ = this.baseSettings.moduleFilterQBase || this.defaultFluteSettings.moduleFilterQBase;
+                const maxQ = this.baseSettings.moduleFilterQMax || this.defaultFluteSettings.moduleFilterQMax;
+                const targetQ = this._mapValue(this.moodConfig.intensity, baseQ, maxQ);
+                console.log(`  -> Module Filter Q: ${targetQ.toFixed(2)}`);
+                if (rampTime > 0.01) {
+                    this.moduleFilter.Q.setTargetAtTime(targetQ, now, timeConstant);
+                } else {
+                    this.moduleFilter.Q.setValueAtTime(targetQ, now);
+                }
+            }
+            
+            // 4. Delay Effect Parameters (affects spaciousness)
+            if (this.feedbackGain) {
+                const baseFeedback = this.baseSettings.delayFeedbackBase || this.defaultFluteSettings.delayFeedbackBase;
+                const maxFeedback = this.baseSettings.delayFeedbackMax || this.defaultFluteSettings.delayFeedbackMax;
+                const targetFeedback = this._mapValue(this.moodConfig.intensity, baseFeedback, maxFeedback);
+                console.log(`  -> Delay Feedback: ${targetFeedback.toFixed(2)}`);
+                if (rampTime > 0.01) {
+                    this.feedbackGain.gain.setTargetAtTime(targetFeedback, now, timeConstant);
+                } else {
+                    this.feedbackGain.gain.setValueAtTime(targetFeedback, now);
+                }
+            }
+            
+            if (this.delayWetGain) {
+                const baseWetMix = this.baseSettings.delayWetMixBase || this.defaultFluteSettings.delayWetMixBase;
+                const maxWetMix = this.baseSettings.delayWetMixMax || this.defaultFluteSettings.delayWetMixMax;
+                const targetWetMix = this._mapValue(this.moodConfig.intensity, baseWetMix, maxWetMix);
+                console.log(`  -> Delay Wet Mix: ${targetWetMix.toFixed(2)}`);
+                if (rampTime > 0.01) {
+                    this.delayWetGain.gain.setTargetAtTime(targetWetMix, now, timeConstant);
+                } else {
+                    this.delayWetGain.gain.setValueAtTime(targetWetMix, now);
+                }
+            }
+        }
+    }
+
+    /**
      * Initialize audio nodes based on initial mood settings.
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) throw new Error("AudioContext or masterOutputNode is missing.");
             if (audioContext.state === 'closed') throw new Error("AudioContext is closed.");
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            this.settings = { ...this.defaultFluteSettings, ...initialSettings };
+            
+            // Store base settings and mood config
+            this.baseSettings = { ...this.defaultFluteSettings, ...initialSettings };
+            this.settings = { ...this.baseSettings }; // Working copy
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
             this.currentMood = initialMood;
+            
             this.currentPattern = this._selectMelodyPattern(this.settings);
             this.currentOctaveOffset = this._selectOctaveOffset(this.settings);
+            this.currentPlayProbability = 1.0; // Default, will be updated by _applyMoodConfig
 
             // --- Generate Noise Buffer ---
             this.noiseBuffer = this._createNoiseBuffer(this.settings.noiseBufferSizeSeconds);
@@ -115,7 +246,7 @@ class AEMelodyFluteSynth {
 
             // --- Create Core Nodes ---
             this.moduleOutputGain = this.audioContext.createGain();
-            this.moduleOutputGain.gain.setValueAtTime(this.settings.melodyVolume, this.audioContext.currentTime);
+            this.moduleOutputGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start silent
 
             this.moduleFilter = this.audioContext.createBiquadFilter();
             this.moduleFilter.type = 'lowpass';
@@ -128,16 +259,19 @@ class AEMelodyFluteSynth {
             this.vibratoLFO.frequency.setValueAtTime(this.settings.vibratoRate, this.audioContext.currentTime);
             this.vibratoLFO.phase = Math.random() * Math.PI * 2; // Uniqueness
             this.vibratoGain = this.audioContext.createGain();
-            this.vibratoGain.gain.setValueAtTime(this.settings.vibratoDepth, this.audioContext.currentTime);
+            this.vibratoGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start with minimal vibrato
             this.vibratoLFO.connect(this.vibratoGain);
 
             // Delay Effect
             this.delayNode = this.audioContext.createDelay(1.0);
             this.delayNode.delayTime.setValueAtTime(this.settings.delayTime, this.audioContext.currentTime);
             this.feedbackGain = this.audioContext.createGain();
-            this.feedbackGain.gain.setValueAtTime(this.settings.delayFeedback, this.audioContext.currentTime);
+            this.feedbackGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start with minimal feedback
             this.delayWetGain = this.audioContext.createGain();
-            this.delayWetGain.gain.setValueAtTime(this.settings.delayWetMix, this.audioContext.currentTime);
+            this.delayWetGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start with minimal wet
+
+            // --- Apply Initial Mood Config ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             // --- Connect Audio Graph ---
             // Note outputs connect to moduleFilter
@@ -276,37 +410,44 @@ class AEMelodyFluteSynth {
     }
 
     /** Adapt melody generation to the new mood's settings. */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) { console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext missing.`); return; }
         if (this.audioContext.state === 'closed') { console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext closed.`); return; }
 
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
         const wasPlaying = this.isPlaying;
 
         try {
             this.stop(this.audioContext.currentTime, 0.1); // Stop current sequence
 
-            this.settings = { ...this.defaultFluteSettings, ...newSettings };
+            // Update base settings and mood config
+            this.baseSettings = { ...this.defaultFluteSettings, ...newSettings };
+            this.settings = { ...this.baseSettings }; // Working copy
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
             this.currentMood = newMood;
 
             const now = this.audioContext.currentTime;
-            const rampTime = transitionTime * 0.6;
 
-            // --- Update Module Parameters ---
-            if (this.moduleOutputGain) this.moduleOutputGain.gain.setTargetAtTime(this.settings.melodyVolume, now, rampTime / 2);
+            // --- Apply New Mood Config with Transition ---
+            this._applyMoodConfig(transitionTime);
+
+            // --- Update Module Parameters (Not Controlled by Mood Config) ---
+            const rampTime = transitionTime * 0.6;
+            
             if (this.moduleFilter) {
                 this.moduleFilter.frequency.setTargetAtTime(this.settings.moduleFilterFreq, now, rampTime);
-                this.moduleFilter.Q.setTargetAtTime(this.settings.moduleFilterQ, now, rampTime);
+                // Note: Q is handled by _applyMoodConfig
             }
-            if (this.vibratoLFO && this.vibratoGain) {
+            
+            if (this.vibratoLFO) {
                 this.vibratoLFO.frequency.setTargetAtTime(this.settings.vibratoRate, now, rampTime);
-                this.vibratoGain.gain.setTargetAtTime(this.settings.vibratoDepth, now, rampTime);
+                // Note: depth is handled by _applyMoodConfig
             }
-            if (this.delayNode && this.feedbackGain && this.delayWetGain) {
+            
+            if (this.delayNode) {
                 this.delayNode.delayTime.setTargetAtTime(this.settings.delayTime, now, rampTime);
-                this.feedbackGain.gain.setTargetAtTime(this.settings.delayFeedback, now, rampTime);
-                this.delayWetGain.gain.setTargetAtTime(this.settings.delayWetMix, now, rampTime);
+                // Note: feedback and wet mix are handled by _applyMoodConfig
             }
 
             // --- Reset Sequencer State ---
@@ -368,6 +509,7 @@ class AEMelodyFluteSynth {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             this.currentPattern = [];
             this.activeNotes.clear();
             console.log(`${this.MODULE_ID}: Disposal complete.`);
@@ -407,7 +549,10 @@ class AEMelodyFluteSynth {
         let timingOffset = (this.settings.humanizeTiming || 0) * (Math.random() - 0.5) * 2.0;
         const intendedPlayTime = noteStartTime + timingOffset; // Humanized intended start time
 
-        if (!isRest) {
+        // Check play probability (affected by occurrence)
+        const willActuallyPlay = !isRest && (Math.random() < this.currentPlayProbability);
+
+        if (willActuallyPlay) {
              // Pass the intended time, _createNote handles lookahead
             this._createNote(patternItem, intendedPlayTime, noteDurationSeconds);
         }
@@ -702,4 +847,4 @@ class AEMelodyFluteSynth {
 // Make globally accessible for the AudioEngine
 window.AEMelodyFluteSynth = AEMelodyFluteSynth;
 
-console.log("ae_melodyFluteSynth.js loaded and AEMelodyFluteSynth class defined.");
+console.log("ae_melodyFluteSynth.js loaded and AEMelodyFluteSynth class defined. Version 1.1.3 (Adds mood configuration support).");

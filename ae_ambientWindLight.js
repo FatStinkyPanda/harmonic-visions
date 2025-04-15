@@ -1,7 +1,7 @@
 // ae_ambientWindLight.js - Audio Module for Light Breeze Ambience
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.0 (Initial High-Quality Implementation)
+// Version: 1.0.1 (Updated with Volume, Occurrence, Intensity Configuration)
 
 /**
  * @class AEAmbientWindLight
@@ -16,9 +16,13 @@ class AEAmbientWindLight {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store base settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // --- Mood Configuration (0-100 scale) ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes ---
         this.outputGain = null;     // Master gain for this module (volume and fades)
@@ -40,10 +44,15 @@ class AEAmbientWindLight {
             mainFilterType: 'bandpass', // Bandpass often works well for focused hiss
             mainFilterFreq: 3200,   // Hz, higher frequency focus for light breeze hiss
             mainFilterQ: 0.75,      // Lower Q for a broader hiss sound
+            mainFilterQBase: 0.4,   // Base Q value for intensity mapping
+            mainFilterQMax: 2.0,    // Max Q value for intensity mapping
             mainFilterLFORate: 0.06, // Hz, very slow modulation of the main hiss character
             mainFilterLFODepth: 500, // Hz, subtle frequency shift range
+            mainFilterLFODepthBase: 200, // Base depth for intensity mapping
+            mainFilterLFODepthMax: 1000, // Max depth for intensity mapping
             // Resonant Filters (Subtle Whistles/Leaf Sounds)
             numResonantFilters: 2,  // Keep low for performance and subtlety
+            maxResonantFilters: 4,  // Maximum for high occurrence
             resonantFilterType: 'bandpass',
             resonantFreqBase: 1500, // Hz, lower base for resonant tones
             resonantFreqRange: 1000,// Hz, range for resonant frequencies
@@ -55,9 +64,13 @@ class AEAmbientWindLight {
             resonantLFORateRange: 0.1,
             resonantGainLFODepthFactor: 0.9, // Modulate gain almost fully (0 to baseGain*factor)
             resonantFreqLFODepth: 150, // Hz, subtle frequency modulation for resonance
+            resonantFreqLFODepthBase: 50, // Base depth for intensity mapping
+            resonantFreqLFODepthMax: 350, // Max depth for intensity mapping
             // Panning LFO
             panLFORate: 0.02,       // Hz, extremely slow panning
             panLFODepth: 0.55,      // Max pan excursion (-0.55 to 0.55), fairly wide but slow movement
+            panLFODepthBase: 0.25,  // Base depth for intensity mapping
+            panLFODepthMax: 0.8,    // Max depth for intensity mapping
             // Envelope
             attackTime: 6.0,        // Very slow fade-in
             releaseTime: 7.0,       // Very slow fade-out
@@ -70,6 +83,159 @@ class AEAmbientWindLight {
         console.log(`${this.MODULE_ID}: Instance created.`);
     }
 
+    // --- Mood Configuration Helper Method ---
+    
+    /**
+     * Maps a value from the 0-100 range to a target range.
+     * @param {number} value0to100 - Value on the 0-100 scale.
+     * @param {number} minTarget - Minimum value in the target range.
+     * @param {number} maxTarget - Maximum value in the target range.
+     * @returns {number} Mapped value in the target range.
+     * @private
+     */
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+    
+    /**
+     * Applies mood configuration values (volume, occurrence, intensity) to audio parameters.
+     * @param {number} transitionTime - Time in seconds for the transition.
+     * @private
+     */
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext || !this.settings) return;
+        
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0; // Shorter ramp for config changes
+        const timeConstant = rampTime / 3.0;
+        
+        // --- Apply Volume ---
+        if (this.outputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings?.ambientVolume || this.defaultWindSettings.ambientVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (rampTime > 0.01) {
+                this.outputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+            } else {
+                this.outputGain.gain.setValueAtTime(targetVolume, now);
+            }
+        }
+        
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100`);
+            
+            // For wind, occurrence affects how many subtle resonant filters (whistling elements)
+            const baseResonantCount = this.baseSettings?.numResonantFilters || this.defaultWindSettings.numResonantFilters;
+            const maxResonantCount = this.baseSettings?.maxResonantFilters || this.defaultWindSettings.maxResonantFilters;
+            
+            // Map occurrence to resonant filter count (integer)
+            const targetResonantCount = Math.max(0, Math.floor(
+                this._mapValue(this.moodConfig.occurrence, 1, maxResonantCount)
+            ));
+            
+            console.log(`${this.MODULE_ID}: Target resonant filter count: ${targetResonantCount}`);
+            
+            // If we need to adjust the number of resonant filters (requires structural change)
+            if (targetResonantCount !== this.resonantFilters.length && this.isEnabled) {
+                // Store current parameters before rebuilding
+                const currentSettings = {...this.settings};
+                currentSettings.numResonantFilters = targetResonantCount;
+                
+                // Disconnect and rebuild if filters need to be changed
+                this._disconnectAndClearFilters();
+                this._createFilterChain(currentSettings);
+                
+                // Reconnect filters to the audio graph
+                if (this.mainFilter && this.pannerNode) {
+                    this.mainFilter.connect(this.pannerNode);
+                }
+                
+                this.resonantFilters.forEach(resData => {
+                    if (resData.inputGain && resData.filter && this.pannerNode) {
+                        resData.filter.connect(this.pannerNode);
+                    }
+                });
+                
+                // Reconnect or recreate noise source to new filter structure
+                if (this.isPlaying) {
+                    this._recreateNoiseSource();
+                }
+                
+                // Update settings with new filter count
+                this.settings.numResonantFilters = targetResonantCount;
+                
+                console.log(`${this.MODULE_ID}: Resonant filter structure updated to ${targetResonantCount} filters`);
+            }
+        }
+        
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Main Filter Q (resonance)
+            if (this.mainFilter) {
+                const baseQ = this.baseSettings?.mainFilterQBase || this.defaultWindSettings.mainFilterQBase;
+                const maxQ = this.baseSettings?.mainFilterQMax || this.defaultWindSettings.mainFilterQMax;
+                const targetQ = this._mapValue(this.moodConfig.intensity, baseQ, maxQ);
+                
+                if (rampTime > 0.01) {
+                    this.mainFilter.Q.setTargetAtTime(targetQ, now, timeConstant);
+                } else {
+                    this.mainFilter.Q.setValueAtTime(targetQ, now);
+                }
+                console.log(`${this.MODULE_ID}: Main filter Q set to ${targetQ.toFixed(2)}`);
+            }
+            
+            // 2. Main Filter LFO Depth
+            const mainFilterLFO = this.lfoNodes.find(lfo => lfo.description === 'mainFilterFreq');
+            if (mainFilterLFO && mainFilterLFO.gain) {
+                const baseDepth = this.baseSettings?.mainFilterLFODepthBase || this.defaultWindSettings.mainFilterLFODepthBase;
+                const maxDepth = this.baseSettings?.mainFilterLFODepthMax || this.defaultWindSettings.mainFilterLFODepthMax;
+                const targetDepth = this._mapValue(this.moodConfig.intensity, baseDepth, maxDepth);
+                
+                if (rampTime > 0.01) {
+                    mainFilterLFO.gain.gain.setTargetAtTime(targetDepth, now, timeConstant);
+                } else {
+                    mainFilterLFO.gain.gain.setValueAtTime(targetDepth, now);
+                }
+                console.log(`${this.MODULE_ID}: Main filter LFO depth set to ${targetDepth.toFixed(2)}`);
+            }
+            
+            // 3. Resonant Filter LFO Depths
+            this.lfoNodes.forEach(lfoData => {
+                if (lfoData.description.startsWith('resonantFreq_') && lfoData.gain) {
+                    const baseDepth = this.baseSettings?.resonantFreqLFODepthBase || this.defaultWindSettings.resonantFreqLFODepthBase;
+                    const maxDepth = this.baseSettings?.resonantFreqLFODepthMax || this.defaultWindSettings.resonantFreqLFODepthMax;
+                    const targetDepth = this._mapValue(this.moodConfig.intensity, baseDepth, maxDepth);
+                    
+                    if (rampTime > 0.01) {
+                        lfoData.gain.gain.setTargetAtTime(targetDepth, now, timeConstant);
+                    } else {
+                        lfoData.gain.gain.setValueAtTime(targetDepth, now);
+                    }
+                }
+            });
+            
+            // 4. Panning LFO Depth
+            const panLFO = this.lfoNodes.find(lfo => lfo.description === 'pan');
+            if (panLFO && panLFO.gain) {
+                const baseDepth = this.baseSettings?.panLFODepthBase || this.defaultWindSettings.panLFODepthBase;
+                const maxDepth = this.baseSettings?.panLFODepthMax || this.defaultWindSettings.panLFODepthMax;
+                const targetDepth = this._mapValue(this.moodConfig.intensity, baseDepth, maxDepth);
+                
+                if (rampTime > 0.01) {
+                    panLFO.gain.gain.setTargetAtTime(targetDepth, now, timeConstant);
+                } else {
+                    panLFO.gain.gain.setValueAtTime(targetDepth, now);
+                }
+                console.log(`${this.MODULE_ID}: Pan LFO depth set to ${targetDepth.toFixed(2)}`);
+            }
+        }
+    }
+
     // --- Core Module Methods (AudioEngine Interface) ---
 
     /**
@@ -78,13 +244,14 @@ class AEAmbientWindLight {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration.
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -95,6 +262,12 @@ class AEAmbientWindLight {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
+            
+            // Store the base settings from data.js
+            this.baseSettings = { ...this.defaultWindSettings, ...initialSettings };
+            // Store the specific 0-100 configuration for this mood
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge incoming config
+            
             // Merge initial settings with specific defaults for this module
             this.settings = { ...this.defaultWindSettings, ...initialSettings };
             this.currentMood = initialMood;
@@ -113,6 +286,17 @@ class AEAmbientWindLight {
             this.outputGain.gain.setValueAtTime(0.0001, this.audioContext.currentTime); // Start silent
             this.pannerNode = this.audioContext.createStereoPanner();
             this.pannerNode.pan.setValueAtTime(0, this.audioContext.currentTime); // Start centered
+
+            // --- Apply Initial Mood Config ---
+            // Adjust number of resonant filters based on occurrence before creating filter chain
+            if (this.moodConfig.occurrence !== undefined) {
+                const baseResonantCount = this.baseSettings.numResonantFilters || this.defaultWindSettings.numResonantFilters;
+                const maxResonantCount = this.baseSettings.maxResonantFilters || this.defaultWindSettings.maxResonantFilters;
+                const targetResonantCount = Math.max(0, Math.floor(
+                    this._mapValue(this.moodConfig.occurrence, 1, maxResonantCount)
+                ));
+                this.settings.numResonantFilters = targetResonantCount;
+            }
 
             // --- Create Filter Chain ---
             this._createFilterChain(this.settings); // Creates main and resonant filters/gains
@@ -149,6 +333,9 @@ class AEAmbientWindLight {
 
             // --- Connect LFOs ---
             this._connectLFOs(); // Connects LFO gain outputs to their targets
+            
+            // --- Apply Volume/Intensity after nodes are connected ---
+            this._applyMoodConfig(0); // Apply immediately (no transition)
 
             this.isEnabled = true;
             console.log(`${this.MODULE_ID}: Initialization complete. Ready for playback.`);
@@ -255,7 +442,8 @@ class AEAmbientWindLight {
 
             // --- Apply Attack Envelope ---
             const attackTime = this.settings.attackTime || this.defaultWindSettings.attackTime;
-            const targetVolume = this.settings.ambientVolume || this.defaultWindSettings.ambientVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0001, 
+                                               this.settings.ambientVolume || this.defaultWindSettings.ambientVolume);
             const timeConstant = attackTime / 3.0; // Time constant for exponential ramp
 
             if (typeof this.outputGain.gain.cancelAndHoldAtTime === 'function') {
@@ -347,8 +535,9 @@ class AEAmbientWindLight {
      * @param {string} newMood - The key of the new mood.
      * @param {object} newSettings - The moodAudioSettings for the new mood.
      * @param {number} transitionTime - Duration for the transition in seconds.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration.
      */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is missing.`);
@@ -358,11 +547,15 @@ class AEAmbientWindLight {
            console.error(`${this.MODULE_ID}: Cannot change mood, AudioContext is closed.`);
            return;
         }
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s... Config:`, moodConfig);
 
         try {
             // Merge new settings with defaults
             const oldSettings = this.settings;
+            
+            // Update base settings and mood config
+            this.baseSettings = { ...this.defaultWindSettings, ...newSettings };
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
             this.settings = { ...this.defaultWindSettings, ...newSettings };
             this.currentMood = newMood;
 
@@ -371,12 +564,8 @@ class AEAmbientWindLight {
             const rampTime = Math.max(0.1, transitionTime * 0.7);
             const shortRampTime = rampTime / 2.0; // Faster ramp for volume/gain levels
 
-            // --- Update Master Volume ---
-            if (this.outputGain) {
-                const targetVolume = this.isPlaying ? this.settings.ambientVolume : 0.0001;
-                this.outputGain.gain.cancelScheduledValues(now);
-                this.outputGain.gain.setTargetAtTime(targetVolume, now, shortRampTime);
-            }
+            // --- Apply New Mood Config with Transition ---
+            this._applyMoodConfig(transitionTime);
 
             // --- Check for Structural Changes ---
             const numResonantFiltersChanged = (this.settings.numResonantFilters || 0) !== (oldSettings.numResonantFilters || 0);
@@ -426,13 +615,13 @@ class AEAmbientWindLight {
                 const freqRand = 1.0 + (Math.random() - 0.5) * 2.0 * (this.settings.filterFreqRandomness || 0);
                 const rateRand = 1.0 + (Math.random() - 0.5) * 2.0 * (this.settings.lfoRateRandomness || 0);
 
-                // Ramp Main Filter
+                // Ramp Main Filter (base frequency only - Q handled by _applyMoodConfig)
                 if (this.mainFilter) {
                     this.mainFilter.frequency.setTargetAtTime(this.settings.mainFilterFreq * freqRand, now, rampTime);
-                    this.mainFilter.Q.setTargetAtTime(this.settings.mainFilterQ, now, rampTime);
+                    // Note: Q is handled by _applyMoodConfig based on intensity
                 }
 
-                // Ramp Resonant Filters
+                // Ramp Resonant Filters (frequencies only - Q and gain may be handled by _applyMoodConfig)
                 this.resonantFilters.forEach((resData, i) => {
                     if (resData.filter) {
                         const freq = this.settings.resonantFreqBase + Math.random() * this.settings.resonantFreqRange;
@@ -446,37 +635,25 @@ class AEAmbientWindLight {
                     }
                 });
 
-                // Ramp LFOs
+                // Ramp LFO rates only - depths handled by _applyMoodConfig based on intensity
                 this.lfoNodes.forEach(lfoData => {
-                    if (!lfoData || !lfoData.lfo || !lfoData.gain) return;
-                    let targetRate = 0, targetDepth = 0;
+                    if (!lfoData || !lfoData.lfo) return;
+                    let targetRate = 0;
 
                     switch(lfoData.description) {
                         case 'mainFilterFreq':
                             targetRate = this.settings.mainFilterLFORate * rateRand;
-                            targetDepth = this.settings.mainFilterLFODepth;
                             break;
                         case 'resonantGain':
-                            targetRate = (this.settings.resonantLFORateBase + Math.random() * this.settings.resonantLFORateRange) * rateRand;
-                            // Find the base gain for the filter this LFO controls
-                            const targetFilterIndexGain = this.resonantFilters.findIndex(rf => rf.inputGain?.gain === lfoData.target);
-                            if(targetFilterIndexGain !== -1) {
-                                const baseGain = this.settings.resonantGainBase + Math.random() * this.settings.resonantGainRange; // Target base gain
-                                targetDepth = baseGain * (this.settings.resonantGainLFODepthFactor || 0.9); // Modulate relative to target base gain
-                            } else { targetDepth = 0; } // Safety
-                            break;
                         case 'resonantFreq':
                              targetRate = (this.settings.resonantLFORateBase + Math.random() * this.settings.resonantLFORateRange) * rateRand;
-                             targetDepth = this.settings.resonantFreqLFODepth;
                              break;
                         case 'pan':
                             targetRate = this.settings.panLFORate * rateRand;
-                            targetDepth = this.settings.panLFODepth;
                             break;
                     }
 
-                    if (targetRate > 0) lfoData.lfo.frequency.setTargetAtTime(Math.max(0.001, targetRate), now, rampTime); // Ensure > 0
-                    if (lfoData.target) lfoData.gain.gain.setTargetAtTime(targetDepth, now, rampTime);
+                    if (targetRate > 0) lfoData.lfo.frequency.setTargetAtTime(Math.max(0.001, targetRate), now, rampTime);
                 });
             }
 
@@ -530,6 +707,7 @@ class AEAmbientWindLight {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }
     }

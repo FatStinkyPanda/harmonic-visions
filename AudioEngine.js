@@ -4,6 +4,18 @@
 // Version: 3.1.3 (Added Auto-Stabilization for Initial Playback)
 
 /**
+ * Helper function to map a value from 0-100 range to a target range
+ * @param {number} value0to100 - Input value in 0-100 range
+ * @param {number} minTarget - Minimum value of target range
+ * @param {number} maxTarget - Maximum value of target range
+ * @returns {number} Mapped value in target range
+ */
+function mapValue(value0to100, minTarget, maxTarget) {
+    const clampedValue = Math.max(0, Math.min(100, value0to100));
+    return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+}
+
+/**
  * @class AudioEngine
  * @description Coordinates audio playback, manages audio modules,
  *              and handles the master audio processing chain.
@@ -619,17 +631,14 @@ class AudioEngine {
 
     /**
      * Instantiates and initializes enabled audio modules for the current mood.
-     * Uses EmotionAudioModules to determine which modules to activate.
+     * Uses EmotionAudioModules to determine which modules to activate and their config.
      * @param {string} mood - The target mood.
-     * @param {object} settings - The audio settings for the target mood.
+     * @param {object} settings - The *base* audio settings for the target mood from data.js.
      * @private
-     * @returns {boolean} Whether initialization was successful
      */
-    _initModulesForMood(mood, settings) {
+    _initModulesForMood(mood, settings) { // Pass base mood settings
         console.log(`AudioEngine: Initializing modules for mood '${mood}'...`);
-        
-        // Validation
-        if (!this.audioContext || !this.masterInputGain) {
+        if (!this.audioContext || !this.masterInputGain) { 
             this._logError('ModuleInit', 'Cannot initialize modules - AudioContext or master input node missing', null, true);
             return false;
         }
@@ -639,65 +648,62 @@ class AudioEngine {
              return false;
         }
 
-        try {
-            // Dispose existing instances before creating new ones
-            this._disposeModuleInstances();
+        this._disposeModuleInstances(); // Dispose existing first
 
-            const modulesForMood = EmotionAudioModules[mood] || EmotionAudioModules.default || [];
-            console.log(`AudioEngine: Modules to activate for mood '${mood}':`, modulesForMood);
+        const moodModuleConfigs = EmotionAudioModules[mood] || EmotionAudioModules.default || [];
+        console.log(`AudioEngine: Module configs for mood '${mood}':`, moodModuleConfigs);
 
-            const activatedModules = [];
-            const failedModules = [];
+        const activatedModules = [];
+        const failedModules = [];
 
-            for (const moduleKey of modulesForMood) {
+        for (const config of moodModuleConfigs) {
+            const moduleKey = config.module; // e.g., 'ae_pads'
+            const className = this._deriveClassName(moduleKey); // e.g., 'AEPads'
+            const ModuleClass = this.loadedModuleClasses[className];
+
+            // Extract mood-specific 0-100 config, providing defaults if missing
+            const moodConfig = {
+                volume: config.volume ?? 100, // Default to 100 if volume isn't specified
+                occurrence: config.occurrence ?? 100, // Default to 100
+                intensity: config.intensity ?? 50, // Default to 50
+            };
+
+            // Skip if occurrence is 0 (module effectively disabled for this mood)
+            if (moodConfig.occurrence <= 0) {
+                 console.log(`AudioEngine: Skipping module '${className}' due to occurrence=0.`);
+                 continue;
+            }
+
+            if (ModuleClass) {
                 try {
-                    // Example: 'ae_pads' -> 'pads' -> 'Pads' -> 'AEPads'
-                    // Example: 'ae_pad_soft_string' -> 'pad_soft_string' -> 'Pad_soft_string' -> 'PadSoftString' -> 'AEPadSoftString'
-                    let derivedName = moduleKey.replace(/^ae_/, ''); // 1. Remove prefix -> 'pads' or 'pad_soft_string'
-                    if (derivedName) {
-                        derivedName = derivedName.charAt(0).toUpperCase() + derivedName.slice(1); // 2. Capitalize first letter -> 'Pads' or 'Pad_soft_string'
-                        derivedName = derivedName.replace(/_([a-z])/g, (match, letter) => letter.toUpperCase()); // 3. Handle underscores -> 'Pads' or 'PadSoftString'
-                    }
-                    const className = 'AE' + derivedName; // 4. Prepend AE -> 'AEPads' or 'AEPadSoftString'
-                    
-                    const ModuleClass = this.loadedModuleClasses[className];
-
-                    if (ModuleClass) {
-                        console.log(`AudioEngine: Instantiating module '${className}'...`);
-                        const moduleInstance = new ModuleClass();
-                        console.log(`AudioEngine: Initializing module '${className}' instance...`);
-                        
-                        // Pass context, master input node, mood-specific settings, and mood key
-                        moduleInstance.init(this.audioContext, this.masterInputGain, settings, mood);
-                        this.audioModules[className] = moduleInstance; // Store instance using class name as key
-                        activatedModules.push(className);
-                        console.log(`AudioEngine: Module '${className}' initialized successfully.`);
-                    } else {
-                        failedModules.push(className);
-                        this._logError('ModuleInit', `Module class '${className}' not found in loaded classes`, new Error('Module class not found'));
-                    }
+                    console.log(`AudioEngine: Instantiating/Initializing module '${className}' with config:`, moodConfig);
+                    const moduleInstance = new ModuleClass();
+                    // Pass context, output, BASE settings from data.js, mood key, AND the 0-100 config
+                    moduleInstance.init(this.audioContext, this.masterInputGain, settings, mood, moodConfig);
+                    this.audioModules[className] = moduleInstance;
+                    activatedModules.push(className);
                 } catch (moduleError) {
-                    failedModules.push(moduleKey);
-                    this._logError('ModuleInit', `Failed to initialize module '${moduleKey}' for mood '${mood}'`, moduleError);
+                    failedModules.push(className);
+                    this._logError('ModuleInit', `Failed to initialize module '${className}' for mood '${mood}'`, moduleError);
                     
                     if (typeof ToastSystem !== 'undefined') {
                         ToastSystem.notify('error', `Audio module '${moduleKey}' failed to load.`);
                     }
                 }
+            } else {
+                 failedModules.push(className);
+                 this._logError('ModuleInit', `Module class '${className}' not found`, null);
             }
-
-            console.log(`AudioEngine: Module initialization for mood '${mood}' complete. Success: ${activatedModules.length}, Failed: ${failedModules.length}`);
-            
-            // Reset analyzer diagnostics on mood change
-            this._analyzerSilentFrames = 0;
-            this._analyzerDiagnosticRun = false;
-            this._silenceLogged = false;
-            
-            return activatedModules.length > 0; // Return true if at least one module was activated
-        } catch (error) {
-            this._logError('ModuleInit', `Error in module initialization process for mood '${mood}'`, error);
-            return false;
         }
+
+        console.log(`AudioEngine: Module initialization for mood '${mood}' complete. Success: ${activatedModules.length}, Failed: ${failedModules.length}`);
+        
+        // Reset analyzer diagnostics on mood change
+        this._analyzerSilentFrames = 0;
+        this._analyzerDiagnosticRun = false;
+        this._silenceLogged = false;
+        
+        return activatedModules.length > 0; // Return true if at least one module was activated
     }
 
     /**
@@ -1489,61 +1495,55 @@ class AudioEngine {
      * Handles the transition between moods for audio modules.
      * @param {string} oldMood - The previous mood key.
      * @param {string} newMood - The new mood key.
-     * @param {object} newSettings - Settings for the new mood.
+     * @param {object} newSettings - Base settings for the new mood from data.js.
      * @param {number} transitionTime - Transition time in seconds.
      * @private
      */
     _handleMoodTransition(oldMood, newMood, newSettings, transitionTime) {
-        // Clear any pending transition timeouts
         this._moodTransitionTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
         this._moodTransitionTimeouts = [];
 
         try {
-            const modulesForNewMood = EmotionAudioModules[newMood] || EmotionAudioModules.default || [];
-            const modulesForOldMood = EmotionAudioModules[oldMood] || EmotionAudioModules.default || [];
-            const currentActiveModuleKeys = Object.keys(this.audioModules); // Get keys (class names) of currently running instances
+            const newMoodModuleConfigs = EmotionAudioModules[newMood] || EmotionAudioModules.default || [];
+            const currentActiveModuleKeys = Object.keys(this.audioModules); // Class names
 
-            // --- Identify modules to stop/dispose, keep/update, add/initialize ---
             const modulesToStopDispose = [];
             const modulesToUpdate = [];
             const modulesToAddInit = [];
 
-            // Check current instances against the old mood list
+            const newConfigMap = new Map(newMoodModuleConfigs.map(cfg => [this._deriveClassName(cfg.module), cfg]));
+
+            // Determine actions for currently active modules
             currentActiveModuleKeys.forEach(className => {
-                const moduleKey = this._findModuleKeyByClassName(className, modulesForOldMood); // Find original key (e.g., ae_pads)
-                if (moduleKey && !modulesForNewMood.includes(moduleKey)) {
-                    modulesToStopDispose.push(className); // Need to stop this one
-                } else if (moduleKey && modulesForNewMood.includes(moduleKey)) {
-                    modulesToUpdate.push(className); // Keep and update this one
+                if (newConfigMap.has(className) && (newConfigMap.get(className).occurrence ?? 100) > 0) {
+                    // Module exists in new mood and should occur
+                    modulesToUpdate.push(className);
                 } else {
-                    // This module instance exists but wasn't listed for the old mood? Or key mismatch?
-                    console.warn(`AudioEngine: Module instance '${className}' exists but wasn't expected for old mood '${oldMood}'. Marking for disposal.`);
+                    // Module not in new mood or occurrence is 0
                     modulesToStopDispose.push(className);
                 }
             });
 
-            // Check modules needed for the new mood
-            modulesForNewMood.forEach(moduleKey => {
-                const className = this._deriveClassName(moduleKey);
-                if (!currentActiveModuleKeys.includes(className)) {
-                    modulesToAddInit.push(moduleKey); // Need to add this one
+            // Determine modules to add
+            newMoodModuleConfigs.forEach(config => {
+                const className = this._deriveClassName(config.module);
+                // Add if it's not currently active AND occurrence > 0
+                if (!this.audioModules[className] && (config.occurrence ?? 100) > 0) {
+                    modulesToAddInit.push(config); // Store the whole config object
                 }
-                // If it was already identified in modulesToUpdate, it's handled there.
             });
-
 
             // --- Execute Actions ---
 
-            // 1. Stop and Schedule Disposal for outgoing modules
+            // 1. Stop and Schedule Disposal
             console.log(`AudioEngine: Modules to Stop/Dispose: [${modulesToStopDispose.join(', ')}]`);
             modulesToStopDispose.forEach(className => {
                 const moduleInstance = this.audioModules[className];
                 if (moduleInstance) {
                     try {
                         if (typeof moduleInstance.stop === 'function') {
-                            moduleInstance.stop(this.audioContext.currentTime, transitionTime * 0.2); // Faster fade for removal
+                            moduleInstance.stop(this.audioContext.currentTime, transitionTime * 0.2);
                         }
-                        // Schedule disposal after a short delay
                         const timeoutId = setTimeout(() => {
                             try {
                                 // Check if it still exists before disposing
@@ -1557,52 +1557,61 @@ class AudioEngine {
                         this._moodTransitionTimeouts.push(timeoutId); // Track timeout
                     } catch (stopError) { this._logError('MoodTransition', `Error stopping module ${className}`, stopError); }
                 }
+                delete this.audioModules[className]; // Remove reference immediately after starting stop
             });
 
-            // 2. Update modules staying active
+            // 2. Update existing modules
             console.log(`AudioEngine: Modules to Update: [${modulesToUpdate.join(', ')}]`);
             modulesToUpdate.forEach(className => {
                 const moduleInstance = this.audioModules[className];
+                const config = newConfigMap.get(className); // Get the new 0-100 config
+                const moodConfig = { // Create the config object to pass
+                     volume: config.volume ?? 100,
+                     occurrence: config.occurrence ?? 100,
+                     intensity: config.intensity ?? 50,
+                };
                 if (moduleInstance && typeof moduleInstance.changeMood === 'function') {
                     try {
-                        moduleInstance.changeMood(newMood, newSettings, transitionTime);
+                        // Pass new base settings AND the new 0-100 config
+                        moduleInstance.changeMood(newMood, newSettings, transitionTime, moodConfig);
                     } catch (changeError) { this._logError('MoodTransition', `Error calling changeMood on module ${className}`, changeError); }
                 } else if (moduleInstance) {
-                    console.warn(`AudioEngine: Module '${className}' has no changeMood method, cannot update smoothly.`);
-                    // Optionally stop/re-init if update is critical
+                     console.warn(`AudioEngine: Module '${className}' has no changeMood method.`);
+                     // Fallback: Re-initialize? Or just let it continue with old settings?
+                     // For now, let it continue. Re-init might be too abrupt.
                 }
             });
 
-            // 3. Initialize and potentially start new modules
-            console.log(`AudioEngine: Modules to Add/Init: [${modulesToAddInit.join(', ')}]`);
-            modulesToAddInit.forEach(moduleKey => {
+            // 3. Initialize and start new modules
+            console.log(`AudioEngine: Modules to Add/Init: [${modulesToAddInit.map(c=>c.module).join(', ')}]`);
+            modulesToAddInit.forEach(config => {
+                const moduleKey = config.module;
                 const className = this._deriveClassName(moduleKey);
                 const ModuleClass = this.loadedModuleClasses[className];
+                 const moodConfig = { // Create the config object to pass
+                      volume: config.volume ?? 100,
+                      occurrence: config.occurrence ?? 100,
+                      intensity: config.intensity ?? 50,
+                 };
                 if (ModuleClass) {
                     try {
                         const moduleInstance = new ModuleClass();
-                        moduleInstance.init(this.audioContext, this.masterInputGain, newSettings, newMood);
-                        this.audioModules[className] = moduleInstance; // Add to active map
-                        // If the engine is currently playing, start the new module
+                        // Pass new base settings AND the new 0-100 config
+                        moduleInstance.init(this.audioContext, this.masterInputGain, newSettings, newMood, moodConfig);
+                        this.audioModules[className] = moduleInstance;
                         if (this.isPlaying && typeof moduleInstance.play === 'function' && this.audioContext?.state === 'running') {
-                            // Start slightly delayed to allow init and avoid overwhelming the system
                             moduleInstance.play(this.audioContext.currentTime + transitionTime * 0.1);
-                            console.log(`AudioEngine: Started new module '${className}' during transition.`);
                         }
                     } catch (initError) { this._logError('MoodTransition', `Error initializing new module ${className}`, initError); }
-                } else {
-                    console.warn(`AudioEngine: Class '${className}' for module key '${moduleKey}' not found during transition init.`);
-                }
+                } else { console.warn(`AudioEngine: Class '${className}' for module key '${moduleKey}' not found during transition init.`); }
             });
             
-            // Schedule auto-stabilization if we're currently playing and modules changed
+            // Schedule auto-stabilization if needed
             if (this.isPlaying && (modulesToAddInit.length > 0 || modulesToUpdate.length > 0) && !this._pendingAutoStabilization) {
                 this._scheduleAutoStabilization();
             }
 
-        } catch (error) {
-            this._logError('MoodTransition', 'Error handling mood transition', error);
-        }
+        } catch (error) { this._logError('MoodTransition', 'Error handling mood transition', error); }
     }
 
     /** Helper to derive class name from module key */

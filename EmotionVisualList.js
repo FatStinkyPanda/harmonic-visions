@@ -1,94 +1,96 @@
-// EmotionVisualList.js
-// Defines which visual modules (vc_*.js) are active for each mood.
-// Keys should match the keys used in VisualCanvas's moduleConfig.
+// EmotionVisualList.js - Updated Structure
+// Defines which visual modules are active and their high-level configuration per mood.
+// - occurrence: Controls density/count of elements (0-100). 100 = max count defined by module.
+// - intensity: Controls strength/prominence of visual effects (0-100). 100 = max effect defined by module.
+// Copyright (c) 2025 FatStinkyPanda - All rights reserved.
 
 const EmotionVisualModules = {
     calm: [
-        'lighting',
-        'stars',
-        'landscape',
-        'water',
-        'particles', // Subtle dust/mist particles
-        'dreamEffects', // Gentle orbs
-        // 'celestial', // Maybe no prominent sun/moon
-        // 'plants', // Maybe sparse or no plants
-        // 'clouds', // Maybe only very light, high clouds
+        { module: 'lighting', occurrence: 100, intensity: 60 },
+        { module: 'stars', occurrence: 80, intensity: 65 },
+        { module: 'landscape', occurrence: 100, intensity: 40 }, // Less dramatic landscape
+        { module: 'water', occurrence: 100, intensity: 50 },
+        { module: 'particles', occurrence: 40, intensity: 30 }, // Subtle dust/mist
+        { module: 'dreamEffects', occurrence: 20, intensity: 40 }, // Few gentle orbs
+        // { module: 'celestial', occurrence: 0, intensity: 0 }, // No sun/moon
+        // { module: 'plants', occurrence: 30, intensity: 40 }, // Sparse gentle plants
+        // { module: 'clouds', occurrence: 20, intensity: 30 }, // Light, high clouds
     ],
     soft: [
-        'lighting',
-        'stars', // Softer stars
-        'landscape', // Smoother landscape
-        'water', // Calmer water
-        'particles', // Firefly-like particles
-        'plants', // Gentle, swaying plants
-        'celestial', // Soft moon or warm sun
-        // 'clouds',
-        // 'dreamEffects',
+        { module: 'lighting', occurrence: 100, intensity: 70 }, // Warmer light intensity
+        { module: 'stars', occurrence: 60, intensity: 50 }, // Softer stars
+        { module: 'landscape', occurrence: 100, intensity: 50 }, // Smoother
+        { module: 'water', occurrence: 80, intensity: 40 }, // Calmer water
+        { module: 'particles', occurrence: 60, intensity: 55 }, // Firefly-like
+        { module: 'plants', occurrence: 70, intensity: 60 }, // Gentle swaying plants
+        { module: 'celestial', occurrence: 100, intensity: 60 }, // Soft moon or warm sun
+        // { module: 'clouds', occurrence: 40, intensity: 40 },
+        // { module: 'dreamEffects', occurrence: 0, intensity: 0 },
     ],
     uplifting: [
-        'lighting', // Brighter lighting
-        'stars', // Sparkling stars
-        'landscape', // More dynamic landscape
-        // 'water', // Maybe less prominent water
-        'particles', // Energetic particles
-        'celestial', // Bright sun
-        'clouds', // Dynamic clouds
-        // 'plants',
-        // 'dreamEffects', // Maybe faster moving effects
+        { module: 'lighting', occurrence: 100, intensity: 85 }, // Brighter
+        { module: 'stars', occurrence: 90, intensity: 80 }, // Sparkling
+        { module: 'landscape', occurrence: 100, intensity: 70 }, // More dynamic
+        // { module: 'water', occurrence: 50, intensity: 60 }, // Less water focus
+        { module: 'particles', occurrence: 85, intensity: 75 }, // Energetic
+        { module: 'celestial', occurrence: 100, intensity: 80 }, // Bright sun
+        { module: 'clouds', occurrence: 70, intensity: 65 }, // Dynamic clouds
+        // { module: 'plants', occurrence: 0, intensity: 0 },
+        { module: 'dreamEffects', occurrence: 50, intensity: 60 }, // Faster effects
     ],
     warm: [
-        'lighting', // Warm tones
-        'landscape', // Rolling hills
-        'water', // Reflective water
-        'particles', // Ember-like particles
-        'plants', // Lush plants
-        'celestial', // Warm, setting sun
-        'clouds', // Soft clouds
-        // 'stars', // Less prominent stars
-        // 'dreamEffects',
+        { module: 'lighting', occurrence: 100, intensity: 75 }, // Warm tones emphasized
+        { module: 'landscape', occurrence: 100, intensity: 60 }, // Rolling hills
+        { module: 'water', occurrence: 60, intensity: 30 }, // Calm, reflective water
+        { module: 'particles', occurrence: 70, intensity: 65 }, // Ember-like
+        { module: 'plants', occurrence: 80, intensity: 70 }, // Lush plants
+        { module: 'celestial', occurrence: 100, intensity: 70 }, // Warm, setting sun
+        { module: 'clouds', occurrence: 50, intensity: 50 }, // Soft clouds
+        // { module: 'stars', occurrence: 30, intensity: 40 }, // Less stars
+        // { module: 'dreamEffects', occurrence: 10, intensity: 30 },
     ],
     cosmic: [
-        'lighting', // Deep space lighting
-        'stars', // Dense starfield
-        'nebulae', // Activate nebulae (assuming vc_stars handles this or separate module)
-        'celestial', // Planets, strange suns/moons
-        'particles', // Cosmic dust/energy
-        'dreamEffects', // Abstract floaters, portals
-        // 'landscape', // Maybe abstract or no landscape
-        // 'water', // Maybe no water
-        // 'plants',
-        // 'clouds', // Maybe nebula clouds instead of atmospheric
+        { module: 'lighting', occurrence: 100, intensity: 90 }, // Deep space, high contrast
+        { module: 'stars', occurrence: 100, intensity: 95 }, // Dense starfield & nebulae
+        { module: 'celestial', occurrence: 80, intensity: 85 }, // Planets, strange suns
+        { module: 'particles', occurrence: 90, intensity: 80 }, // Cosmic dust/energy
+        { module: 'dreamEffects', occurrence: 70, intensity: 75 }, // Abstract floaters, portals
+        // { module: 'landscape', occurrence: 20, intensity: 50 }, // Abstract/minimal landscape
+        // { module: 'water', occurrence: 0, intensity: 0 },
+        // { module: 'plants', occurrence: 0, intensity: 0 },
+        { module: 'clouds', occurrence: 60, intensity: 70 }, // Nebula clouds
     ],
-    // Define lists for other moods ('bright', 'mystical')
-    bright: [ // Example
-        'lighting',
-        'stars',
-        'landscape',
-        'particles',
-        'celestial',
-        'clouds',
-        'dreamEffects',
+    // --- Additional Example Moods ---
+    bright: [
+        { module: 'lighting', occurrence: 100, intensity: 90 },
+        { module: 'stars', occurrence: 70, intensity: 85 },
+        { module: 'landscape', occurrence: 100, intensity: 65 },
+        { module: 'particles', occurrence: 90, intensity: 80 },
+        { module: 'celestial', occurrence: 100, intensity: 75 },
+        { module: 'clouds', occurrence: 60, intensity: 60 },
+        { module: 'dreamEffects', occurrence: 60, intensity: 70 },
     ],
-    mystical: [ // Example
-        'lighting',
-        'stars',
-        'landscape', // Maybe slightly distorted
-        'water', // Still water
-        'particles', // Wispy particles
-        'celestial', // Strange moon/planets
-        'dreamEffects', // Orbs and floaters
-        'plants', // Unusual plants
+    mystical: [
+        { module: 'lighting', occurrence: 100, intensity: 65 },
+        { module: 'stars', occurrence: 85, intensity: 70 },
+        { module: 'landscape', occurrence: 100, intensity: 55 }, // Slightly distorted
+        { module: 'water', occurrence: 70, intensity: 25 }, // Still water
+        { module: 'particles', occurrence: 55, intensity: 60 }, // Wispy
+        { module: 'celestial', occurrence: 60, intensity: 70 }, // Strange moon/planets
+        { module: 'dreamEffects', occurrence: 80, intensity: 70 }, // Orbs and floaters
+        { module: 'plants', occurrence: 40, intensity: 50 }, // Unusual plants
+        { module: 'clouds', occurrence: 30, intensity: 45 }, // Low mist/fog like
     ],
-    // Default set
+    // --- Default Fallback ---
     default: [
-        'lighting',
-        'stars',
-        'landscape',
-        'particles',
+        { module: 'lighting', occurrence: 100, intensity: 70 },
+        { module: 'stars', occurrence: 70, intensity: 60 },
+        { module: 'landscape', occurrence: 100, intensity: 50 },
+        { module: 'particles', occurrence: 50, intensity: 50 },
     ]
 };
 
-// Make globally accessible (if not using modules/bundler)
+// Make globally accessible
 window.EmotionVisualModules = EmotionVisualModules;
 
-console.log("EmotionVisualList.js loaded.");
+console.log("EmotionVisualList.js loaded and defined EmotionVisualModules (Updated Structure).");

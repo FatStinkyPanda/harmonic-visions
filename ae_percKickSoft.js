@@ -1,7 +1,7 @@
 // ae_percKickSoft.js - Audio Module for Soft Kick Drum Percussion
 // Part of the Harmonic Visions project by FatStinkyPanda
 // Copyright (c) 2025 FatStinkyPanda - All rights reserved.
-// Version: 1.0.2 (Fixed timing issues with lookahead scheduling)
+// Version: 1.0.3 (Added Vol/Occur/Inten configuration system)
 
 /**
  * @class AEPercKickSoft
@@ -16,9 +16,13 @@ class AEPercKickSoft {
         this.audioContext = null;
         this.masterOutput = null; // Connects to AudioEngine's masterInputGain
         this.settings = null;
+        this.baseSettings = null; // Store base settings from data.js
         this.currentMood = null;
         this.isEnabled = false;
         this.isPlaying = false;
+        
+        // --- Mood Configuration (0-100 scale) ---
+        this.moodConfig = { volume: 100, occurrence: 100, intensity: 50 }; // Default config
 
         // --- Core Audio Nodes (Module Level) ---
         this.moduleOutputGain = null; // Master gain for this module (volume and overall fades)
@@ -27,6 +31,7 @@ class AEPercKickSoft {
         // --- Sequencing State ---
         this.sequenceTimeoutId = null; // Timeout ID for scheduling the next kick check
         this.currentPattern = [];      // Kick pattern (e.g., [1, 0, 0.5, 0] where 1=hit, 0=rest, 0.5=softer hit)
+        this.basePattern = [];         // Original pattern before occurrence filtering
         this.currentPatternIndex = 0;  // Position within the current pattern
         this.beatDuration = 0.75;      // Duration of one beat/step in seconds (derived from tempo)
         this.nextKickTime = 0;         // AudioContext time for the next potential kick
@@ -61,9 +66,158 @@ class AEPercKickSoft {
             // Module Envelope
             attackTimeModule: 0.5,    // Module fade-in time (s)
             releaseTimeModule: 1.5,   // Module fade-out time (s)
+            
+            // --- Intensity Mapping Limits ---
+            startFrequencyMin: 120,   // Min start frequency at 0% intensity
+            startFrequencyMax: 180,   // Max start frequency at 100% intensity
+            pitchDropTimeMin: 0.06,   // Min pitch drop time at 0% intensity (slower = softer)
+            pitchDropTimeMax: 0.02,   // Max pitch drop time at 100% intensity (faster = punchier) 
+            decayTimeMin: 0.15,       // Min decay time at 0% intensity
+            decayTimeMax: 0.35,       // Max decay time at 100% intensity
+            filterCutoffMin: 250,     // Min filter cutoff at 0% intensity
+            filterCutoffMax: 500,     // Max filter cutoff at 100% intensity
+            velocityRangeMin: 0.1,    // Min velocity variation at 0% intensity
+            velocityRangeMax: 0.3     // Max velocity variation at 100% intensity
         };
 
         console.log(`${this.MODULE_ID}: Instance created.`);
+    }
+
+    // --- Helper for mapping 0-100 values to parameter ranges ---
+    _mapValue(value0to100, minTarget, maxTarget) {
+        const clampedValue = Math.max(0, Math.min(100, value0to100 ?? 100)); // Default to 100 if undefined
+        return minTarget + (maxTarget - minTarget) * (clampedValue / 100.0);
+    }
+
+    // --- Apply mood configuration to parameters ---
+    _applyMoodConfig(transitionTime = 0) {
+        if (!this.moodConfig || !this.audioContext) return; // Check if config and context exist
+
+        const now = this.audioContext.currentTime;
+        const rampTime = transitionTime > 0 ? transitionTime * 0.5 : 0; // Shorter ramp for config changes
+        const timeConstant = rampTime / 3.0;
+
+        console.log(`${this.MODULE_ID}: Applying mood config - Volume: ${this.moodConfig.volume}, Occurrence: ${this.moodConfig.occurrence}, Intensity: ${this.moodConfig.intensity}`);
+
+        // --- Apply Volume ---
+        if (this.moduleOutputGain && this.moodConfig.volume !== undefined) {
+            const baseVolume = this.baseSettings.kickVolume || this.defaultKickSettings.kickVolume;
+            const targetVolume = this._mapValue(this.moodConfig.volume, 0.0, baseVolume);
+            console.log(`${this.MODULE_ID}: Applying Volume ${this.moodConfig.volume}/100 -> ${targetVolume.toFixed(3)}`);
+            
+            if (this.isPlaying) {
+                if (rampTime > 0.01) {
+                    this.moduleOutputGain.gain.setTargetAtTime(targetVolume, now, timeConstant);
+                } else {
+                    this.moduleOutputGain.gain.setValueAtTime(targetVolume, now);
+                }
+            } else {
+                // Store for when play() is called
+                this.settings.kickVolume = targetVolume;
+            }
+        }
+
+        // --- Apply Occurrence ---
+        if (this.moodConfig.occurrence !== undefined) {
+            // Occurrence affects the density of the kick pattern
+            // We'll filter the original pattern based on the occurrence value
+            this._updatePatternBasedOnOccurrence();
+            console.log(`${this.MODULE_ID}: Applying Occurrence ${this.moodConfig.occurrence}/100 -> pattern density modified`);
+        }
+
+        // --- Apply Intensity ---
+        if (this.moodConfig.intensity !== undefined) {
+            console.log(`${this.MODULE_ID}: Applying Intensity ${this.moodConfig.intensity}/100`);
+            
+            // 1. Starting Frequency (affects "attack" character)
+            const startFreqMin = this.baseSettings.startFrequencyMin || this.defaultKickSettings.startFrequencyMin;
+            const startFreqMax = this.baseSettings.startFrequencyMax || this.defaultKickSettings.startFrequencyMax;
+            this.settings.startFrequencyBase = this._mapValue(this.moodConfig.intensity, startFreqMin, startFreqMax);
+            console.log(`  -> Start Frequency: ${this.settings.startFrequencyBase.toFixed(2)} Hz`);
+            
+            // 2. Pitch Drop Time (higher intensity = faster drop = punchier kick)
+            const pitchDropMin = this.baseSettings.pitchDropTimeMin || this.defaultKickSettings.pitchDropTimeMin;
+            const pitchDropMax = this.baseSettings.pitchDropTimeMax || this.defaultKickSettings.pitchDropTimeMax;
+            // Note: We actually want FASTER drops (lower values) at higher intensity
+            this.settings.pitchDropTimeBase = this._mapValue(100 - this.moodConfig.intensity, pitchDropMax, pitchDropMin);
+            console.log(`  -> Pitch Drop Time: ${this.settings.pitchDropTimeBase.toFixed(3)} s`);
+            
+            // 3. Decay Time (higher intensity = longer decay)
+            const decayTimeMin = this.baseSettings.decayTimeMin || this.defaultKickSettings.decayTimeMin;
+            const decayTimeMax = this.baseSettings.decayTimeMax || this.defaultKickSettings.decayTimeMax;
+            this.settings.decayTimeBase = this._mapValue(this.moodConfig.intensity, decayTimeMin, decayTimeMax);
+            console.log(`  -> Decay Time: ${this.settings.decayTimeBase.toFixed(3)} s`);
+            
+            // 4. Filter Cutoff (if filter exists)
+            if (this.filterNode && this.settings.useFilter) {
+                const cutoffMin = this.baseSettings.filterCutoffMin || this.defaultKickSettings.filterCutoffMin;
+                const cutoffMax = this.baseSettings.filterCutoffMax || this.defaultKickSettings.filterCutoffMax;
+                const targetCutoff = this._mapValue(this.moodConfig.intensity, cutoffMin, cutoffMax);
+                console.log(`  -> Filter Cutoff: ${targetCutoff.toFixed(1)} Hz`);
+                
+                if (rampTime > 0.01) {
+                    this.filterNode.frequency.setTargetAtTime(targetCutoff, now, timeConstant);
+                } else {
+                    this.filterNode.frequency.setValueAtTime(targetCutoff, now);
+                }
+                this.settings.filterCutoff = targetCutoff;
+            }
+            
+            // 5. Velocity Range (higher intensity = more velocity variation)
+            const velRangeMin = this.baseSettings.velocityRangeMin || this.defaultKickSettings.velocityRangeMin;
+            const velRangeMax = this.baseSettings.velocityRangeMax || this.defaultKickSettings.velocityRangeMax;
+            this.settings.velocityRange = this._mapValue(this.moodConfig.intensity, velRangeMin, velRangeMax);
+            console.log(`  -> Velocity Range: ${this.settings.velocityRange.toFixed(2)}`);
+        }
+    }
+    
+    // --- Updates the kick pattern based on occurrence setting ---
+    _updatePatternBasedOnOccurrence() {
+        if (!this.basePattern || this.basePattern.length === 0) {
+            // If no base pattern, use the current one as base
+            this.basePattern = [...this.settings.pattern];
+        }
+        
+        if (this.moodConfig.occurrence >= 100) {
+            // At 100% occurrence, use the full pattern
+            this.currentPattern = [...this.basePattern];
+            return;
+        }
+        
+        // For lower occurrence values, selectively zero out some hits
+        // Higher velocity hits are preserved longer as occurrence decreases
+        this.currentPattern = this.basePattern.map(velocity => {
+            if (velocity === 0) return 0; // Keep rests as rests
+            
+            // The higher the velocity and occurrence, the more likely the hit is kept
+            // Very high velocity hits need lower occurrence threshold to be removed
+            const keepThreshold = (1 - velocity) * 100;
+            
+            // If occurrence is below the threshold, remove the hit
+            return this.moodConfig.occurrence <= keepThreshold ? 0 : velocity;
+        });
+        
+        // Ensure at least one hit always plays if occurrence > 0
+        if (this.moodConfig.occurrence > 0 && !this.currentPattern.some(v => v > 0)) {
+            // Find the highest velocity hit in the original pattern
+            let maxIndex = 0;
+            let maxVelocity = 0;
+            
+            for (let i = 0; i < this.basePattern.length; i++) {
+                if (this.basePattern[i] > maxVelocity) {
+                    maxVelocity = this.basePattern[i];
+                    maxIndex = i;
+                }
+            }
+            
+            // Keep at least this one hit
+            this.currentPattern[maxIndex] = this.basePattern[maxIndex];
+        }
+        
+        // Update the active pattern
+        if (this.isPlaying) {
+            console.log(`${this.MODULE_ID}: Updated pattern based on occurrence ${this.moodConfig.occurrence}`);
+        }
     }
 
     // --- Core Module Methods (AudioEngine Interface) ---
@@ -74,13 +228,14 @@ class AEPercKickSoft {
      * @param {AudioNode} masterOutputNode - The node to connect the module's output to.
      * @param {object} initialSettings - The moodAudioSettings for the initial mood.
      * @param {string} initialMood - The initial mood key.
+     * @param {object} moodConfig - The volume/occurrence/intensity configuration (0-100 values).
      */
-    init(audioContext, masterOutputNode, initialSettings, initialMood) {
+    init(audioContext, masterOutputNode, initialSettings, initialMood, moodConfig) {
         if (this.isEnabled) {
             console.warn(`${this.MODULE_ID}: Already initialized.`);
             return;
         }
-        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'...`);
+        console.log(`${this.MODULE_ID}: Initializing for mood '${initialMood}'... Config:`, moodConfig);
 
         try {
             if (!audioContext || !masterOutputNode) {
@@ -91,10 +246,17 @@ class AEPercKickSoft {
             }
             this.audioContext = audioContext;
             this.masterOutput = masterOutputNode;
-            // Merge initial settings with specific defaults for this module
-            this.settings = { ...this.defaultKickSettings, ...initialSettings };
+            
+            // Store the base settings from data.js and default settings
+            this.baseSettings = { ...this.defaultKickSettings, ...initialSettings };
+            // Initialize settings with base settings
+            this.settings = { ...this.baseSettings };
+            // Store the specific 0-100 configuration for this mood
+            this.moodConfig = { ...this.moodConfig, ...moodConfig };
+            
             this.currentMood = initialMood;
-            this.currentPattern = this.settings.pattern || this.defaultKickSettings.pattern;
+            this.basePattern = [...(this.baseSettings.pattern || this.defaultKickSettings.pattern)];
+            this.currentPattern = [...this.basePattern]; // Start with full pattern
             this._updateBeatDuration(); // Calculate initial beat duration
 
             // --- Create Core Module Nodes ---
@@ -120,6 +282,12 @@ class AEPercKickSoft {
 
             // Final connection to Master Output
             this.moduleOutputGain.connect(this.masterOutput);
+            
+            // Apply the mood configuration settings (volume, occurrence, intensity)
+            this._applyMoodConfig(0); // Apply immediately (no transition)
+            
+            // Apply pattern changes based on occurrence
+            this._updatePatternBasedOnOccurrence();
 
             this.isEnabled = true;
             console.log(`${this.MODULE_ID}: Initialization complete.`);
@@ -265,7 +433,7 @@ class AEPercKickSoft {
     }
 
     /** Adapt kick generation parameters to the new mood's settings. */
-    changeMood(newMood, newSettings, transitionTime) {
+    changeMood(newMood, newSettings, transitionTime, moodConfig) {
         if (!this.isEnabled) return;
         if (!this.audioContext) {
             console.error(`${this.MODULE_ID}: Cannot change mood - AudioContext missing.`);
@@ -276,43 +444,38 @@ class AEPercKickSoft {
             return;
         }
 
-        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s`);
+        console.log(`${this.MODULE_ID}: Changing mood to '${newMood}' over ${transitionTime.toFixed(2)}s. Config:`, moodConfig);
         try {
-            // Merge new settings with defaults
-            this.settings = { ...this.defaultKickSettings, ...newSettings };
+            // Store new base settings and 0-100 config
+            this.baseSettings = { ...this.defaultKickSettings, ...newSettings };
+            this.settings = { ...this.baseSettings }; // Reset settings to base
+            this.moodConfig = { ...this.moodConfig, ...moodConfig }; // Merge new config
             this.currentMood = newMood;
+            
+            // Store the base pattern from new settings
+            this.basePattern = [...(this.baseSettings.pattern || this.defaultKickSettings.pattern)];
 
             const now = this.audioContext.currentTime;
             const rampTime = transitionTime * 0.5; // Use part of transition for smooth ramps
 
-            // --- Update Module Parameters ---
-            // 1. Overall Volume
-            if (this.moduleOutputGain) {
-                const targetVolume = this.isPlaying ? this.settings.kickVolume : 0.0001;
-                const gainParam = this.moduleOutputGain.gain;
-                 if (typeof gainParam.cancelAndHoldAtTime === 'function') {
-                     gainParam.cancelAndHoldAtTime(now);
-                 } else {
-                     gainParam.cancelScheduledValues(now);
-                 }
-                gainParam.setTargetAtTime(targetVolume, now, rampTime / 2); // Faster volume ramp
+            // Apply the new mood configuration with transition time
+            this._applyMoodConfig(transitionTime);
+            
+            // Update the beat duration based on new tempo
+            this._updateBeatDuration();
+            
+            // Update pattern based on occurrence
+            this._updatePatternBasedOnOccurrence();
+            
+            // Reset pattern index for a cleaner transition
+            if (this.isPlaying) {
+                this.currentPatternIndex = 0;
             }
 
-            // 2. Filter Parameters (if filter exists)
-            if (this.filterNode) {
-                this.filterNode.frequency.setTargetAtTime(this.settings.filterCutoff, now, rampTime);
+            // Update filter Q if needed (not directly controlled by intensity)
+            if (this.filterNode && this.settings.useFilter) {
                 this.filterNode.Q.setTargetAtTime(this.settings.filterQ, now, rampTime);
             }
-
-            // 3. Update Sequencing Parameters
-            this.currentPattern = this.settings.pattern || this.defaultKickSettings.pattern;
-            this._updateBeatDuration(); // Recalculate beat duration based on new tempo
-            // Reset pattern index? Optional - could let current pattern finish or reset immediately.
-            // Let's reset for a potentially quicker change in rhythm.
-            this.currentPatternIndex = 0;
-
-            // Kick sound parameters (frequency, decay etc.) are updated in settings
-            // and will affect the *next* kick generated by _createSingleKick.
 
             console.log(`${this.MODULE_ID}: Kick parameters updated for mood '${newMood}'.`);
 
@@ -360,7 +523,9 @@ class AEPercKickSoft {
             this.audioContext = null;
             this.masterOutput = null;
             this.settings = null;
+            this.baseSettings = null;
             this.currentPattern = [];
+            this.basePattern = [];
             this.activeKicks.clear(); // Ensure map is cleared
             console.log(`${this.MODULE_ID}: Disposal complete.`);
         }
